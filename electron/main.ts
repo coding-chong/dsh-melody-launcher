@@ -524,8 +524,9 @@ function createServices(): Services {
     packageStoreRoot: path.join(userData, 'plugin-store'),
     readSettings: () => settings.read(),
     readApiKey: dshHome => readDeepSeekApiKey(dshHome),
-    resolveAgentApi: dshHome => resolveCopilotAgentApi(dshHome),
-    resolveAgentApiForModel: (dshHome, provider, model) => resolveAgentApiForModel(dshHome, provider, model),
+    resolveAgentApi: async dshHome => resolveCopilotAgentApi(dshHome, (await settings.read()).profileName),
+    resolveAgentApiForModel: async (dshHome, provider, model) =>
+      resolveAgentApiForModel(dshHome, provider, model, (await settings.read()).profileName),
     prepareNodeRuntime: () => prepareNodeRuntime('ai'),
     preparePnpmRuntime: nodeRuntime => preparePnpmRuntime('ai', nodeRuntime),
     emitEvent: event => events.aiSessionEvent(event),
