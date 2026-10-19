@@ -15,7 +15,7 @@ export interface CreatePackDialogProps {
   plugins: ManagedPlugin[]
   /** 已安装的 Agent 预设；即使没有来源记录也会随包离线导出。 */
   presets: InstalledPreset[]
-  /** 已安装且带来源记录的 Skill。 */
+  /** 已安装的 Skill；没有来源记录的会随包离线导出。 */
   skills: InstalledSkill[]
   /** 已安装的 Application Addon。 */
   applications: InstalledApplicationAddon[]
@@ -196,13 +196,14 @@ export function CreatePackDialog({ plugins, presets, skills, applications, onCon
             {resourceTab === 'skills' && (
               <div className="pack-resource-panel">
                 <h3>包含技能（已选 {selectedSkills.size} / {skills.length}）</h3>
-                <p>从已安装且有来源记录的 Skill 中挑选。</p>
+                <p>从已安装的 Skill 中挑选；没有来源记录的会随包离线导出。</p>
                 {skills.length === 0 ? (
                   <div className="pack-checklist-empty">当前环境还没有可加入整合包的 Skill。</div>
                 ) : (
                   <div className="pack-plugin-checklist">
                     {skills.map(skill => {
-                      const addable = Boolean(skill.repository && skill.sourcePath && skill.revision)
+                      const sourced = Boolean(skill.repository && skill.sourcePath && skill.revision)
+                      const addable = sourced || Boolean(skill.path)
                       const checked = selectedSkills.has(skill.name)
                       return (
                         <label className={`pack-checklist-item ${checked ? 'checked' : ''} ${addable ? '' : 'muted'}`} key={skill.name}>
@@ -216,7 +217,7 @@ export function CreatePackDialog({ plugins, presets, skills, applications, onCon
                           <span className="pack-item-glyph">{skill.name.slice(0, 2).toUpperCase()}</span>
                           <span className="pack-checklist-copy">
                             <strong>{skill.name}</strong>
-                            <small>{addable ? `${skill.repository} · ${skill.sourcePath}` : '无来源记录，不可加入'}</small>
+                            <small>{sourced ? `${skill.repository} · ${skill.sourcePath}` : '无来源记录，将随包离线导出'}</small>
                           </span>
                         </label>
                       )
