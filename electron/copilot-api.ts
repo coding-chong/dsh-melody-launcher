@@ -1,9 +1,7 @@
-import { readFile } from 'node:fs/promises'
-import path from 'node:path'
-import { parseDocument } from 'yaml'
 import type { CustomApiProvider } from '../src/types'
 import { readCredential, readDeepSeekApiKey } from './credentials'
 import { credentialNameForRoute, listCustomApiProviders } from './custom-api'
+import { readEntryConfig } from './provider-config'
 
 /**
  * Copilot 模型 API 解析。
@@ -31,18 +29,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-async function readAgentDefaultModel(dshHome: string): Promise<Record<string, unknown>> {
-  try {
-    const source = await readFile(path.join(dshHome, 'settings.yaml'), 'utf8')
-    const document = parseDocument(source, { uniqueKeys: true })
-    if (document.errors.length > 0) return {}
-    const value = document.toJS() as unknown
-    const entry = isRecord(value) ? value['agent-default-model'] : undefined
-    return isRecord(entry) ? entry : {}
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {}
-    throw error
-  }
+/**
+ * `agent-default-model` 也是 Profile 组合补丁里的一条 Loader 条目，旧版 DSH
+ * 才放在 `settings.yaml`。沿用 provider 配置的定位规则，避免读到退役文件。
+ */
+async function readAgentDefaultModel(
+  dshHome: string,
+  profileName?: string | null,
+): Promise<Record<string, unknown>> {
+  const config = await readEntryConfig(
+    { dshHome, profileName },
+    { id: 'agent-default-model', name: '@deepseek-ai/dsh-agent-default-model' },
+  ).catch(() => ({}))
+  return isRecord(config) ? config : {}
 }
 
 async function credentialFor(dshHome: string, provider: CustomApiProvider): Promise<string | null> {
@@ -60,11 +59,14 @@ function customApiToAgentApi(provider: CustomApiProvider, apiKey: string, model?
   }
 }
 
-export async function resolveCopilotAgentApi(dshHome: string): Promise<CopilotAgentApi | null> {
-  const providers = await listCustomApiProviders(dshHome).catch(() => [])
+export async function resolveCopilotAgentApi(
+  dshHome: string,
+  profileName?: string | null,
+): Promise<CopilotAgentApi | null> {
+  const providers = await listCustomApiProviders({ dshHome, profileName }).catch(() => [])
 
   // 1. agent-default-model 显式指定的自定义 provider。
-  const agentDefault = await readAgentDefaultModel(dshHome).catch(() => ({} as Record<string, unknown>))
+  const agentDefault = await readAgentDefaultModel(dshHome, profileName).catch(() => ({} as Record<string, unknown>))
   if (typeof agentDefault.provider === 'string') {
     const provider = providers.find(candidate => candidate.route === agentDefault.provider)
     if (provider && provider.protocol === 'openai-completions' && provider.modelIds.length > 0) {
@@ -98,10 +100,13 @@ export interface CopilotModelOption {
 }
 
 /** Copilot 模型选择器候选：DeepSeek 官方 + 全部自定义 provider 的模型。 */
-export async function listCopilotModels(dshHome: string): Promise<CopilotModelOption[]> {
+export async function listCopilotModels(
+  dshHome: string,
+  profileName?: string | null,
+): Promise<CopilotModelOption[]> {
   const [deepseekKey, providers] = await Promise.all([
     readDeepSeekApiKey(dshHome).catch(() => null),
-    listCustomApiProviders(dshHome).catch(() => [] as CustomApiProvider[]),
+    listCustomApiProviders({ dshHome, profileName }).catch(() => [] as CustomApiProvider[]),
   ])
   const options: CopilotModelOption[] = [{
     provider: 'deepseek-official',
@@ -133,6 +138,7 @@ export async function resolveAgentApiForModel(
   dshHome: string,
   providerId: string,
   model: string,
+  profileName?: string | null,
 ): Promise<CopilotModelResolution> {
   if (providerId === 'deepseek-official') {
     const key = await readDeepSeekApiKey(dshHome).catch(() => null)
@@ -140,7 +146,7 @@ export async function resolveAgentApiForModel(
       ? { kind: 'official' }
       : { kind: 'unavailable', reason: 'DeepSeek 官方 Key 未配置，请先在 API 配置中填写。' }
   }
-  const providers = await listCustomApiProviders(dshHome).catch(() => [] as CustomApiProvider[])
+  const providers = await listCustomApiProviders({ dshHome, profileName }).catch(() => [] as CustomApiProvider[])
   const provider = providers.find(candidate => candidate.route === providerId)
   if (!provider) return { kind: 'unavailable', reason: `自定义 API「${providerId}」已不存在。` }
   if (provider.protocol !== 'openai-completions') {

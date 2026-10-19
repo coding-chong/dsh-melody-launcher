@@ -647,14 +647,35 @@ function LauncherShell() {
               }}
             />
             <div className="manager-edge-actions" aria-label="管理界面快捷操作">
-              <button className={`icon-button copilot-toggle ${copilotOpen ? 'active' : ''} ${ai.active || copilot.sessions.some(session => ['queued', 'preparing', 'running'].includes(session.phase)) ? 'busy' : ''}`} type="button" title={copilotOpen ? '收起 DSH Copilot' : '打开 DSH Copilot'} aria-label={copilotOpen ? '收起 DSH Copilot' : '打开 DSH Copilot'} onClick={() => setCopilotOpen(current => !current)}>
+              <button
+                className={`icon-button copilot-toggle ${copilotOpen ? 'active' : ''} ${ai.active || copilot.sessions.some(session => ['queued', 'preparing', 'running'].includes(session.phase)) ? 'busy' : ''}`}
+                type="button"
+                data-hint={copilotOpen ? '收起 DSH Copilot' : '打开 DSH Copilot'}
+                title={copilotOpen ? '收起 DSH Copilot' : '打开 DSH Copilot'}
+                aria-label={copilotOpen ? '收起 DSH Copilot' : '打开 DSH Copilot'}
+                onClick={() => {
+                  const next = !copilotOpen
+                  setCopilotOpen(next)
+                  store.showToast({ kind: 'success', message: next ? '已打开 DSH Copilot 面板。' : '已收起 DSH Copilot 面板。' })
+                }}
+              >
                 <PanelRight size={19} />
                 {(ai.active || copilot.sessions.some(session => ['queued', 'preparing', 'running'].includes(session.phase))) && <span className="copilot-toggle-dot" />}
               </button>
             </div>
           </div>
           </div>
-          <button className="icon-button manager-back" type="button" title="返回启动页" aria-label="返回启动页" onClick={navigation.showLauncher}>
+          <button
+            className="icon-button manager-back"
+            type="button"
+            data-hint="返回启动页"
+            title="返回启动页"
+            aria-label="返回启动页"
+            onClick={() => {
+              navigation.showLauncher()
+              store.showToast({ kind: 'success', message: '已返回启动页。' })
+            }}
+          >
             <svg className="manager-corner-mark" viewBox="0 0 36 36" aria-hidden="true" focusable="false">
               <path d="M36 0V29.5A6.5 6.5 0 0 1 29.5 36H0Z" />
             </svg>

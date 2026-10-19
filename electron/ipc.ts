@@ -225,16 +225,18 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
   })
   ipcMain.handle(IPC.customApiList, async () => {
     const current = await settings.read()
-    return listCustomApiProviders(current.dshHome)
+    // 模型路由跟随活跃 Profile：DSH 0.2 起配置界面写的是 Profile 的组合补丁，
+    // 直接读写 $DSH_HOME/settings.yaml 会让界面与 Profile 永久对不上。
+    return listCustomApiProviders({ dshHome: current.dshHome, profileName: current.profileName })
   })
   ipcMain.handle(IPC.customApiSave, async (_event, input: CustomApiProviderInput) => {
     const current = await settings.read()
-    return saveCustomApiProvider(current.dshHome, input)
+    return saveCustomApiProvider({ dshHome: current.dshHome, profileName: current.profileName }, input)
   })
   ipcMain.handle(IPC.customApiRemove, async (_event, route: string) => {
     if (typeof route !== 'string') throw new Error('自定义 API 路由格式无效。')
     const current = await settings.read()
-    return removeCustomApiProvider(current.dshHome, route)
+    return removeCustomApiProvider({ dshHome: current.dshHome, profileName: current.profileName }, route)
   })
   ipcMain.handle(IPC.customApiTest, async (_event, target: ApiProbeTarget) => {
     if (!target || typeof target !== 'object') throw new Error('API 检测目标无效。')
@@ -917,7 +919,7 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
   })
   ipcMain.handle(IPC.aiSessionsModels, async () => {
     const current = await settings.read()
-    return listCopilotModels(current.dshHome)
+    return listCopilotModels(current.dshHome, current.profileName)
   })
   ipcMain.handle(IPC.aiSessionsSetModel, (_event, payload: { sessionId: string; model?: string | null }) => {
     if (!payload || typeof payload.sessionId !== 'string') throw new Error('Copilot 会话无效。')
