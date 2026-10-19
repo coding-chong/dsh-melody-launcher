@@ -710,6 +710,7 @@ function LauncherShell() {
         <CredentialDialog
           status={store.credentialStatus}
           providers={store.customApiProviders}
+          profileName={store.settings?.profileName ?? '—'}
           loading={store.customApiLoading}
           busy={store.busy === BUSY.credential}
           onClose={() => setCredentialOpen(false)}

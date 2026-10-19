@@ -3,6 +3,7 @@ dist/
 dist-electron/
 release/
 release-v*/
+release-preview/
 *.log
 .env
 .env.local

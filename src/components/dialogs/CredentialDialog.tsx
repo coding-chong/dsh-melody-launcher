@@ -26,6 +26,8 @@ import type {
 interface CredentialDialogProps {
   status: CredentialStatus
   providers: CustomApiProvider[]
+  /** 当前活跃 Profile 名：自定义模型路由就声明在它的 cordis.patch.yml 里。 */
+  profileName: string
   loading: boolean
   busy: boolean
   onClose: () => void
@@ -81,6 +83,7 @@ function draftFromProvider(provider: CustomApiProvider): ProviderDraft {
 export function CredentialDialog({
   status,
   providers,
+  profileName,
   loading,
   busy,
   onClose,
@@ -189,14 +192,14 @@ export function CredentialDialog({
           ) : (
             <div className="custom-api-panel">
               <div className="custom-api-heading">
-                <div><strong>自定义模型服务</strong><span>通过 DSH 内置的 LLM Provider 加载。</span></div>
+                <div><strong>自定义模型服务</strong><span>读取自 Profile「{profileName}」的 cordis.patch.yml（llm-pi-ai 条目）。</span></div>
                 <button type="button" className="secondary-button compact" disabled={busy || loading} onClick={() => { setDraft(emptyDraft()); setConfirmingRemove(null) }}><Plus size={15} />新增</button>
               </div>
 
               {loading ? (
                 <div className="custom-api-empty"><LoaderCircle className="spin" size={20} /><span>正在读取本地 API 配置</span></div>
               ) : providers.length === 0 && !draft ? (
-                <div className="custom-api-empty"><ServerCog size={23} /><strong>还没有自定义 API</strong><span>可接入兼容 OpenAI 或 Anthropic 协议的本地、代理或第三方服务。</span></div>
+                <div className="custom-api-empty"><ServerCog size={23} /><strong>Profile「{profileName}」没有声明自定义 API</strong><span>去 Profile 的 cordis.patch.yml 里确认存在 id 为 llm-pi-ai 的条目；DSH 0.2 起 settings.yaml 已废弃。</span></div>
               ) : (
                 <div className="custom-api-list">
                   {providers.map(provider => (
