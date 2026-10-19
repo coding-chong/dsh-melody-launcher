@@ -149,6 +149,8 @@ export interface RuntimeControllerOptions {
   openExternal: (url: string) => void
   resolveApplicationLaunchPlan?: () => Promise<ApplicationLaunchPlan>
   spawnProcess?: typeof spawnCommand
+  /** 端口可用性探测（默认探测本机回环端口，测试可注入以避免依赖真实端口占用）。 */
+  isPortAvailable?: (port: number) => Promise<boolean>
   stopProcess?: (processToStop: ChildProcessWithoutNullStreams) => Promise<void>
   /** 启动旧版 DSH 时使用的临时凭据兼容备份目录。 */
   legacyCredentialsBackupRoot?: string
@@ -308,7 +310,11 @@ export function createRuntimeController(options: RuntimeControllerOptions): Runt
       options.emitOutput('info', `启动模式：${replacement.name} 替代普通 DSH Web`)
     } else if (isDshWebLaunch(executable, launchArgs)) {
       launchArgs = withDshProfile(executable, launchArgs, settings.profileName)
-      const selectedPort = await findAvailableWebPort(settings.webPort)
+      const selectedPort = await findAvailableWebPort(
+        settings.webPort,
+        PORT_FALLBACK_ATTEMPTS,
+        options.isPortAvailable ?? isLoopbackPortAvailable,
+      )
       if (selectedPort === null) {
         const message = `从端口 ${settings.webPort} 开始连续检测 ${PORT_FALLBACK_ATTEMPTS} 个端口，均不可用。`
         options.emitOutput('error', message)

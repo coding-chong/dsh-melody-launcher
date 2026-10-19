@@ -14,6 +14,8 @@ import {
   runtimeEnvironment,
   withDshProfile,
   withDshWebPort,
+  type RuntimeController,
+  type RuntimeControllerOptions,
 } from '../electron/runtime'
 import type { ApplicationLaunchPlan } from '../electron/application-addons'
 import type { NodeRuntime } from '../electron/node-runtime'
@@ -59,6 +61,14 @@ function managedNode(): NodeRuntime {
     npx: path.join(root, process.platform === 'win32' ? 'npx.cmd' : 'npx'),
     managed: true,
   }
+}
+
+/**
+ * 这些用例只验证启动参数与状态流转，不验证真实端口占用。
+ * 端口探测固定为可用，避免开发机上 3080 被真实 DSH 占用时断言随环境漂移。
+ */
+function createIsolatedController(options: RuntimeControllerOptions): RuntimeController {
+  return createRuntimeController({ isPortAvailable: async () => true, ...options })
 }
 
 describe('extractLocalUrl', () => {
@@ -172,7 +182,7 @@ describe('应用加载项运行模式', () => {
     const settings = { ...controllerSettings(), profileName: 'pack-123123' }
     const child = fakeChild(4099)
     const spawnProcess = vi.fn((_executable: string, _args: string[]) => child)
-    const runtime = createRuntimeController({
+    const runtime = createIsolatedController({
       readSettings: async () => settings,
       prepareNodeRuntime: async () => managedNode(),
       fallbackWorkspace: () => process.cwd(),
@@ -193,7 +203,7 @@ describe('应用加载项运行模式', () => {
     const settings = controllerSettings()
     const child = fakeChild(4150)
     const spawnProcess = vi.fn(() => child)
-    const runtime = createRuntimeController({
+    const runtime = createIsolatedController({
       readSettings: async () => settings,
       prepareNodeRuntime: async () => managedNode(),
       fallbackWorkspace: () => process.cwd(),
@@ -229,7 +239,7 @@ describe('应用加载项运行模式', () => {
       },
       companions: [],
     }
-    const runtime = createRuntimeController({
+    const runtime = createIsolatedController({
       readSettings: async () => settings,
       prepareNodeRuntime: async () => nodeRuntime,
       fallbackWorkspace: () => process.cwd(),
@@ -278,7 +288,7 @@ describe('应用加载项运行模式', () => {
     })
     const stopProcess = vi.fn(async () => {})
     const openExternal = vi.fn()
-    const runtime = createRuntimeController({
+    const runtime = createIsolatedController({
       readSettings: async () => settings,
       prepareNodeRuntime: async () => managedNode(),
       fallbackWorkspace: () => process.cwd(),
@@ -335,7 +345,7 @@ describe('应用加载项运行模式', () => {
         if (!child) throw new Error('unexpected duplicate launch')
         return child
       })
-      const runtime = createRuntimeController({
+      const runtime = createIsolatedController({
         readSettings: async () => settings,
         prepareNodeRuntime: async () => managedNode(),
         fallbackWorkspace: () => process.cwd(),
