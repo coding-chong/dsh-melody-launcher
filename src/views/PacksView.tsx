@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { PageHeading } from '../components/PageHeading'
+import { ProfileNameDialog } from '../components/dialogs/ProfileNameDialog'
 import { formatRelativeTime } from '../lib/format'
 import type { InstalledApplicationAddon, InstalledPreset, InstalledSkill, ManagedPlugin, PackStatus, ProfileExportMode, ProfileState, ProfileSummary } from '../types'
 
@@ -105,6 +106,16 @@ export function PacksView({
   installedApplications,
 }: PacksViewProps) {
   const refreshing = busy === 'pack-refresh'
+  // window.prompt 在 Electron renderer 里不可用（调用即抛错），名称输入必须走应用内对话框。
+  const [namePrompt, setNamePrompt] = useState<{ mode: 'create' | 'clone'; source?: string } | null>(null)
+
+  const submitProfileName = (name: string) => {
+    const prompt = namePrompt
+    setNamePrompt(null)
+    if (!prompt) return
+    if (prompt.mode === 'clone' && prompt.source) onCreateProfile?.(name, prompt.source)
+    else onCreateProfile?.(name)
+  }
 
   return (
     <div className="page packs-page">
@@ -134,10 +145,7 @@ export function PacksView({
         <section className="profile-environment-panel" aria-label="Profile 环境列表">
           <div className="profile-environment-heading">
             <div><strong>运行 Profile</strong><span>每个目录同时是 DSH 运行环境和可分享整合包，当前选择由 profileName 唯一决定</span></div>
-            <button type="button" className="secondary-button accent" disabled={busy !== null} onClick={() => {
-              const name = window.prompt('请输入新的 Profile 名称')?.trim()
-              if (name) onCreateProfile?.(name)
-            }}><Plus size={16} />新建 Profile</button>
+            <button type="button" className="secondary-button accent" disabled={busy !== null} onClick={() => setNamePrompt({ mode: 'create' })}><Plus size={16} />新建 Profile</button>
           </div>
           <div className="profile-environment-list">
             {profiles.map(item => (
@@ -155,10 +163,7 @@ export function PacksView({
                     onExport={() => onExport(item.id)}
                   />
                   {!item.selected && <button type="button" className="secondary-button" disabled={busy !== null} onClick={() => onDeleteProfile?.(item.id)}>删除</button>}
-                  {!item.selected && <button type="button" className="secondary-button" disabled={busy !== null} onClick={() => {
-                    const name = window.prompt('请输入克隆后的 Profile 名称')?.trim()
-                    if (name) onCreateProfile?.(name, item.id)
-                  }}>克隆</button>}
+                  {!item.selected && <button type="button" className="secondary-button" disabled={busy !== null} onClick={() => setNamePrompt({ mode: 'clone', source: item.id })}>克隆</button>}
                 </div>
               </article>
             ))}
@@ -168,6 +173,16 @@ export function PacksView({
 
       {profiles.length === 0 && (
         <EmptyPacks onCreate={onCreate} onImport={onImport} onImportRepository={onImportRepository} disabled={busy !== null} />
+      )}
+
+      {namePrompt && (
+        <ProfileNameDialog
+          mode={namePrompt.mode}
+          source={namePrompt.source}
+          busy={busy !== null}
+          onSubmit={submitProfileName}
+          onClose={() => setNamePrompt(null)}
+        />
       )}
 
       <style>{packsStyle}</style>
