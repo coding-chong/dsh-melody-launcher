@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { parse } from 'yaml'
 import { DEFAULT_PROFILE_NAME, DSH_PACKAGE_NAME } from '../src/constants'
@@ -220,6 +220,22 @@ export interface SettingsStoreOptions {
 
 export function createSettingsStore(options: SettingsStoreOptions): SettingsStore {
   let cache: AppSettings | null = null
+  let cacheStamp: string | null = null
+
+  /**
+   * settings.json 的变更标记。缓存必须能被外部改写打破：另一个启动器实例、
+   * 旧版本启动器、或者用户手工编辑，都会让内存里的 profileName 变成过期值，
+   * 之后所有按 Profile 定位的读取（例如自定义模型服务的 cordis.patch.yml）
+   * 都会落到错误的目录上。
+   */
+  async function fileStamp(): Promise<string | null> {
+    try {
+      const info = await stat(options.filePath)
+      return `${info.mtimeMs}:${info.size}`
+    } catch {
+      return null
+    }
+  }
 
   async function profileDshVersion(settings: AppSettings): Promise<string | null | undefined> {
     if (!isSafeProfileName(settings.profileName) || typeof settings.dshHome !== 'string' || !path.isAbsolute(settings.dshHome)) return undefined
@@ -263,12 +279,7 @@ export function createSettingsStore(options: SettingsStoreOptions): SettingsStor
     return projected
   }
 
-  async function read(): Promise<AppSettings> {
-    if (cache) {
-      const profileVersion = await profileDshVersion(cache)
-      cache = await projectRuntime(profileVersion === undefined ? cache : { ...cache, dshVersion: profileVersion })
-      return cache
-    }
+  async function loadFromDisk(): Promise<AppSettings> {
     const defaults = options.createDefaults()
     let stored: Partial<AppSettings> | null = null
     try {
@@ -279,7 +290,19 @@ export function createSettingsStore(options: SettingsStoreOptions): SettingsStor
     let loaded = mergeStoredSettings(defaults, stored)
     const profileVersion = await profileDshVersion(loaded)
     if (profileVersion !== undefined) loaded = { ...loaded, dshVersion: profileVersion }
-    cache = await projectRuntime(loaded, true)
+    return projectRuntime(loaded, true)
+  }
+
+  async function read(): Promise<AppSettings> {
+    // 磁盘上的设置被外部改写后，缓存整体失效：只刷新 dshVersion 会留下过期的
+    // profileName / dshHome，正是「切了 Profile 但读取还停在旧 Profile」的来源。
+    if (cache && await fileStamp() === cacheStamp) {
+      const profileVersion = await profileDshVersion(cache)
+      cache = await projectRuntime(profileVersion === undefined ? cache : { ...cache, dshVersion: profileVersion })
+      return cache
+    }
+    cache = await loadFromDisk()
+    cacheStamp = await fileStamp()
     return cache
   }
 
@@ -287,6 +310,9 @@ export function createSettingsStore(options: SettingsStoreOptions): SettingsStor
     read,
     async save(input: AppSettings): Promise<AppSettings> {
       let next = validateSettings(input)
+      // 这里刻意使用交付给渲染层的缓存快照，而不是重新读取：渲染层提交的是它看到
+      // 的那一份 dshVersion，重新读取会把「未改动」误判成「显式改动」，从而覆盖掉
+      // Profile 元数据里更新的版本。外部改写只在 read() 里失效。
       const current = cache ?? await read()
       const profileChanged = current.profileName !== next.profileName || !samePath(current.dshHome, next.dshHome)
       if (profileChanged) {
@@ -307,6 +333,7 @@ export function createSettingsStore(options: SettingsStoreOptions): SettingsStor
       await mkdir(path.dirname(options.filePath), { recursive: true })
       await writeFile(options.filePath, `${JSON.stringify(next, null, 2)}\n`, 'utf8')
       cache = next
+      cacheStamp = await fileStamp()
       return next
     },
   }

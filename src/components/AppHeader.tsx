@@ -60,6 +60,16 @@ export function AppHeader({
   onToggleMaximize,
   onClose,
 }: AppHeaderProps) {
+  // 「未配置」永远是相对于**当前 Profile** 的结论：自定义模型服务存在于 Profile 的
+  // cordis.patch.yml 里，所以标签必须能自证它读的是哪个 Profile，否则用户只能猜。
+  const apiStateLabel = customApiCount > 0
+    ? `${customApiCount} 个自定义`
+    : credentialStatus.configured ? '已配置' : '未配置'
+  const apiStateTitle = customApiCount > 0
+    ? `Profile「${profileName}」声明了 ${customApiCount} 个自定义模型服务`
+    : credentialStatus.configured
+      ? '已保存 DeepSeek API Key；当前 Profile 未声明自定义模型服务'
+      : `Profile「${profileName}」的 cordis.patch.yml 未声明自定义模型服务，也没有 DeepSeek API Key`
   return (
     <header className="app-header">
       <div className="brand-block">
@@ -84,12 +94,12 @@ export function AppHeader({
             <button
               className={`credential-button header-api-button ${credentialStatus.configured || customApiCount > 0 ? 'configured' : ''}`}
               type="button"
-              title="配置 DeepSeek 与自定义模型 API"
+              title={`配置 DeepSeek 与自定义模型 API · 当前读取 Profile「${profileName}」`}
               onClick={onCredential}
             >
               <KeyRound size={17} />
               <span>API 配置</span>
-              <span className="credential-state">{customApiCount > 0 ? `${customApiCount} 个自定义` : credentialStatus.configured ? '已配置' : '未配置'}</span>
+              <span className="credential-state" title={apiStateTitle}>{apiStateLabel}</span>
             </button>
             <label className="header-pack-switcher">
               <Package size={16} />
@@ -131,12 +141,12 @@ export function AppHeader({
         {!showPackSwitcher && <button
           className={`credential-button ${credentialStatus.configured || customApiCount > 0 ? 'configured' : ''}`}
           type="button"
-          title="配置 DeepSeek 与自定义模型 API"
+          title={`配置 DeepSeek 与自定义模型 API · 当前读取 Profile「${profileName}」`}
           onClick={onCredential}
         >
           <KeyRound size={17} />
           <span>API 配置</span>
-          <span className="credential-state">{customApiCount > 0 ? `${customApiCount} 个自定义` : credentialStatus.configured ? '已配置' : '未配置'}</span>
+          <span className="credential-state" title={apiStateTitle}>{apiStateLabel}</span>
         </button>}
         {launcherUpdate && (launcherUpdate.state === 'update-available' || launcherUpdate.state === 'downloading' || launcherUpdate.state === 'downloaded') && (
           <button

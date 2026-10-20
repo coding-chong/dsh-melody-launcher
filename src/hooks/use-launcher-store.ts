@@ -360,6 +360,24 @@ export function useLauncherStore() {
     }
   }, [api, showToast])
 
+  /**
+   * Profile 作用域的状态：自定义模型服务与 DeepSeek 凭据都定义在 Profile 自己的
+   * `cordis.patch.yml` / 凭据引用里，因此每一次改变当前 Profile 的动作都必须重读。
+   * 漏掉这一步会让顶栏一直显示上一个 Profile 的结论（典型表现：切到声明了
+   * `llm-pi-ai` 的 Profile 之后，钥匙仍写着「未配置」）。
+   */
+  const refreshProfileScopedState = useCallback(async (): Promise<void> => {
+    const [providers, credential] = await Promise.all([
+      api.listCustomApiProviders().catch(error => {
+        showToast({ kind: 'error', message: errorText(error) })
+        return null
+      }),
+      api.getDeepSeekCredentialStatus().catch(() => null),
+    ])
+    if (providers) setCustomApiProviders(providers)
+    if (credential) setCredentialStatus(credential)
+  }, [api, showToast])
+
   /** 安装完成后一次性同步受影响的几处状态。 */
   const applyInstallResult = useCallback((result: RepositoryInstallResult) => {
     setSettings(result.settings)
@@ -581,14 +599,19 @@ export function useLauncherStore() {
     const saved = await run(BUSY.settings, async () => {
       const stored = await api.saveSettings(next)
       setSettings(stored)
-      setDshInstallation(await api.detectDshInstallation())
-      setCredentialStatus(await api.getDeepSeekCredentialStatus())
-      setCustomApiProviders(await api.listCustomApiProviders())
-      await refreshProfile()
       return stored
     }, { success: '设置已保存。' })
+    // 设置写入成功之后，Profile 作用域的状态各自独立刷新：任一项失败都不能连坐
+    // 「自定义 API 列表」，否则它会停在旧 Profile 的结果上（顶栏显示「未配置」）。
+    if (saved !== undefined) {
+      await Promise.all([
+        refreshProfileScopedState(),
+        api.detectDshInstallation().then(setDshInstallation).catch(() => undefined),
+        refreshProfile(),
+      ])
+    }
     return saved !== undefined
-  }, [api, refreshProfile, run])
+  }, [api, refreshProfile, refreshProfileScopedState, run])
 
   const saveApiKey = useCallback(async (apiKey: string): Promise<boolean> => {
     const status = await run(BUSY.credential, () => api.setDeepSeekApiKey(apiKey), {
@@ -830,6 +853,7 @@ export function useLauncherStore() {
       setSettings(result)
       await refreshProfile()
       await refreshProfiles()
+      await refreshProfileScopedState()
       return result
     }, { success: `已切换到 Profile「${profileName}」。` })
     // 依赖补齐由主进程复用安装进度事件；如果安装在准备阶段失败，
@@ -837,7 +861,7 @@ export function useLauncherStore() {
     // 结束后清除残留进度，避免 Profile 下拉框和导出菜单永久处于写锁状态。
     setInstallProgress(null)
     return next
-  }, [api, profiles, refreshProfiles, refreshProfile, run])
+  }, [api, profiles, refreshProfileScopedState, refreshProfiles, refreshProfile, run])
 
   const deleteProfile = useCallback(async (profileName: string) => {
     const next = await run(`profile-delete:${profileName}`, () => api.deleteProfile(profileName), { success: `Profile「${profileName}」已删除。` })
@@ -864,10 +888,11 @@ export function useLauncherStore() {
       setSettings(settings)
       await refreshProfile()
       await refreshPacks()
+      await refreshProfileScopedState()
       return settings
     }, { success: '整合包已启用，插件开关与顺序已应用。' })
     return next !== undefined
-  }, [api, refreshPacks, refreshProfile, run])
+  }, [api, refreshPacks, refreshProfile, refreshProfileScopedState, run])
 
   const deactivatePack = useCallback(async (): Promise<boolean> => {
     const next = await run('pack-deactivate', async () => {
@@ -875,10 +900,11 @@ export function useLauncherStore() {
       setSettings(settings)
       await refreshProfile()
       await refreshPacks()
+      await refreshProfileScopedState()
       return settings
     }, { success: '已停用整合包，已恢复切换前的插件状态。' })
     return next !== undefined
-  }, [api, refreshPacks, refreshProfile, run])
+  }, [api, refreshPacks, refreshProfile, refreshProfileScopedState, run])
 
   const removePack = useCallback(async (packId: string): Promise<boolean> => {
     const next = await run(`pack-remove:${packId}`, async () => {

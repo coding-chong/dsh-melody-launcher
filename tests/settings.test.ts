@@ -409,3 +409,25 @@ describe('skillMaxArchiveMb', () => {
     ).skillMaxArchiveMb).toBe(64)
   })
 })
+
+describe('external settings rewrites', () => {
+  it('reloads profileName when settings.json changes outside the store', async () => {
+    const env = await settingsFixture()
+    expect((await env.store.read()).profileName).toBe('web')
+
+    // 另一个实例 / 手改 / 旧版本启动器改写同一份 settings.json。
+    await new Promise(resolve => setTimeout(resolve, 20))
+    await writeFile(env.filePath, JSON.stringify({ ...env.initial, profileName: 'desktop' }), 'utf8')
+
+    // 缓存必须被打破：否则后续所有按 Profile 定位的读取都会落在旧目录上。
+    expect((await env.store.read()).profileName).toBe('desktop')
+  })
+
+  it('keeps serving the cached value while the file is untouched', async () => {
+    const env = await settingsFixture()
+    await env.store.read()
+    const before = (await env.store.read()).profileName
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect((await env.store.read()).profileName).toBe(before)
+  })
+})
