@@ -717,9 +717,15 @@ export async function switchProfile(options: ProfileServiceOptions, profileName:
 }
 
 export async function deleteProfile(options: ProfileServiceOptions, profileName: string): Promise<void> {
-  if (options.isRuntimeRunning?.()) throw new Error('请先停止 DSH，再删除 Profile。')
   const current = await options.readSettings()
-  if (current.profileName === profileName) throw new Error('当前 Profile 不能删除。')
+  // 只有「正在被运行中的 DSH 加载的那一个 Profile」需要先停止 DSH。删除别的
+  // Profile 与运行中的进程无关：它只加载 settings.profileName 的 node_modules，
+  // 拿整台启动器当借口拒绝删除别的环境，等于禁止用户清理没在用的目录。
+  if (current.profileName === profileName) {
+    throw new Error(options.isRuntimeRunning?.()
+      ? '请先停止 DSH，再删除当前 Profile。'
+      : '当前 Profile 不能删除。')
+  }
   const dshHome = await homeOf(options)
   const directory = profileDirFor(dshHome, profileName)
   const manifest = await readProfileDependencyManifest(directory)
@@ -731,7 +737,16 @@ export async function deleteProfile(options: ProfileServiceOptions, profileName:
       }
     }
   }
-  await rm(directory, { recursive: true, force: true })
+  try {
+    await rm(directory, { recursive: true, force: true })
+  } catch (error) {
+    // 运行中的 DSH 可能仍以硬链接/句柄引用这个目录里的文件，Windows 会抛 EBUSY/EPERM。
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'EBUSY' || code === 'EPERM' || code === 'ENOTEMPTY') {
+      throw new Error(`Profile「${profileName}」仍有文件被运行中的 DSH 占用，请停止 DSH 后重试。`)
+    }
+    throw error
+  }
   // Receipts are profile-scoped source metadata. Removing them prevents a
   // later export from accidentally attributing another Profile's repository
   // to this one. The physical pnpm store is deliberately untouched.
