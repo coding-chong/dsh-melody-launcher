@@ -3793,6 +3793,45 @@ input:focus-visible {
   background: #fbfcfb;
 }
 
+/* 共享池里的候选：本体在别的 Profile 或池子里，本 Profile 没有声明它。
+   左侧虚线 + 米色底 + 淡化，一眼和「已装但停用」区分开。 */
+.plugin-row.candidate {
+  position: relative;
+  color: var(--quiet);
+  background: #fdfbf5;
+}
+
+.plugin-row.candidate::before {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: repeating-linear-gradient(180deg, #d9c9a3 0 4px, transparent 4px 8px);
+  content: "";
+}
+
+.plugin-row.candidate:hover {
+  background: #fbf7ec;
+}
+
+/* 选中态的实心色条要压过候选虚线。 */
+.plugin-row.selected::before {
+  background: var(--accent);
+}
+
+.pool-candidate-badge {
+  display: inline-flex !important;
+  margin-left: 6px;
+  align-items: center;
+  padding: 0 5px !important;
+  border: 1px dashed #c9b791;
+  border-radius: 999px;
+  color: #8a6d3b !important;
+  font-size: 9px !important;
+  font-weight: 600 !important;
+  vertical-align: 1px;
+  white-space: nowrap;
+}
+
 .plugin-row.dragging {
   opacity: 0.45;
 }

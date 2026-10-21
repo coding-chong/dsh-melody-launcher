@@ -98,8 +98,7 @@ describe('PluginsView installed Web UI', () => {
     expect(props.onUninstall).toHaveBeenCalledWith(webUi)
   })
 
-  it('offers a row-level uninstall while built-in layers never get one', async () => {
-    const props = await mount(true)
+  it('offers a row-level uninstall while built-in layers never get one', async () => {    const props = await mount(true)
     const rows = [...document.querySelectorAll<HTMLElement>('.plugin-rows > .plugin-row')]
     const target = rows.find(element => element.textContent?.includes(webUi.packageName))!
     const rowUninstall = target.querySelector<HTMLButtonElement>('button.row-danger')
@@ -113,5 +112,30 @@ describe('PluginsView installed Web UI', () => {
 
     await act(async () => rowUninstall!.click())
     expect(props.onUninstall).toHaveBeenCalledWith(webUi)
+  })
+
+  it('marks shared-pool candidates so they read differently from installed plugins', async () => {
+    const profile = await demoApi.readProfile()
+    const candidate: ManagedPlugin = {
+      ...webUi,
+      packageName: 'dsh-tauri',
+      displayName: 'Tauri',
+      enabled: false,
+      order: 0,
+      declaredInProfile: false,
+    }
+    const plugins = [...profile.plugins.filter(item => item.builtin), webUi, candidate]
+    await mount(false, {
+      profile: { ...profile, plugins, activeBundles: plugins.map(item => item.packageName) },
+    })
+
+    const rows = [...document.querySelectorAll<HTMLElement>('.plugin-rows > .plugin-row')]
+    const candidateRow = rows.find(element => element.textContent?.includes('dsh-tauri'))!
+    expect(candidateRow.classList.contains('candidate')).toBe(true)
+    expect(candidateRow.querySelector('.pool-candidate-badge')?.textContent).toBe('池内')
+
+    const installedRow = rows.find(element => element.textContent?.includes(webUi.packageName))!
+    expect(installedRow.classList.contains('candidate')).toBe(false)
+    expect(installedRow.querySelector('.pool-candidate-badge')).toBeNull()
   })
 })
