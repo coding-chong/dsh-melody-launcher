@@ -17,7 +17,9 @@ interface PackageManifest {
   peerDependencies?: Record<string, string>
   dsh?: {
     profile?: { bundles?: string[] }
-    bundle?: { patch?: string }
+    // DSH 生态同时接受单个路径与有序路径数组（见 dshmarket 的 declaredBundlePatchFiles）。
+    // 运行时来源是第三方 package.json，类型必须按数组兜底，否则 path.isAbsolute() 会抛 ERR_INVALID_ARG_TYPE。
+    bundle?: { patch?: string | string[] }
   }
 }
 
@@ -83,16 +85,23 @@ interface ProfilePluginInventory {
 }
 
 async function bundlePatchExists(packageDirectory: string, manifest: PackageManifest | null): Promise<boolean> {
-  const patchFile = manifest?.dsh?.bundle?.patch
-  if (!patchFile || path.isAbsolute(patchFile)) return false
-  const resolved = path.resolve(packageDirectory, patchFile)
-  if (resolved !== packageDirectory && !resolved.startsWith(`${packageDirectory}${path.sep}`)) return false
-  try {
-    await access(resolved)
-    return true
-  } catch {
-    return false
+  const declared = manifest?.dsh?.bundle?.patch
+  // 单个路径与有序路径数组都是合法声明（对齐 dshmarket 的 declaredBundlePatchFiles）。
+  const patchFiles = (typeof declared === 'string' ? [declared] : Array.isArray(declared) ? declared : [])
+    .filter((file): file is string => typeof file === 'string' && file.trim() !== '')
+    .map(file => file.trim())
+  for (const patchFile of patchFiles) {
+    if (path.isAbsolute(patchFile)) continue
+    const resolved = path.resolve(packageDirectory, patchFile)
+    if (resolved !== packageDirectory && !resolved.startsWith(`${packageDirectory}${path.sep}`)) continue
+    try {
+      await access(resolved)
+      return true
+    } catch {
+      // 继续检查数组里的下一个补丁文件。
+    }
   }
+  return false
 }
 
 async function readResolvedManifest(packageDirectory: string): Promise<ResolvedDependency | null> {

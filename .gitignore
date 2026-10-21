@@ -8,6 +8,7 @@ release-next/
 # 唯一的最新构建产物目录（electron-builder 输出 + 启动脚本），不进版本库。
 dist-latest/
 dist-build/
+dist-final/
 *.log
 .env
 .env.local

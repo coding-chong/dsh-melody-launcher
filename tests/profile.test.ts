@@ -91,6 +91,46 @@ describe('profile management', () => {
     })
   })
 
+  it('accepts an ordered array of bundle patch files without throwing', async () => {
+    const profileDir = await seedProfile()
+    // DSH 生态允许 dsh.bundle.patch 是路径数组；启动器必须逐文件兜底，
+    // 而不是把整个数组交给 path.isAbsolute()（那会抛 ERR_INVALID_ARG_TYPE 并拖死整次读取）。
+    await writeFile(
+      path.join(profileDir, 'node_modules', '@demo', 'sidebar', 'package.json'),
+      JSON.stringify({
+        name: '@demo/sidebar',
+        version: '2.0.0',
+        dsh: { bundle: { patch: ['./missing.patch.yml', './cordis.patch.yml'] } },
+      }),
+    )
+
+    const state = await readProfile(temporaryHome, profileName)
+
+    expect(state.plugins.find(plugin => plugin.packageName === '@demo/sidebar')).toMatchObject({
+      enabled: false,
+      compatible: true,
+    })
+  })
+
+  it('treats an array of missing patch files as an incompatible bundle instead of failing the read', async () => {
+    const profileDir = await seedProfile()
+    await writeFile(
+      path.join(profileDir, 'node_modules', '@demo', 'sidebar', 'package.json'),
+      JSON.stringify({
+        name: '@demo/sidebar',
+        version: '2.0.0',
+        dsh: { bundle: { patch: ['./gone-a.yml', './gone-b.yml'] } },
+      }),
+    )
+
+    const state = await readProfile(temporaryHome, profileName)
+
+    expect(state.plugins.find(plugin => plugin.packageName === '@demo/sidebar')).toMatchObject({
+      enabled: false,
+      compatible: false,
+    })
+  })
+
   it('exposes the shared plugin pool in every Profile and activates a sibling-only plugin locally', async () => {
     await seedProfile()
     const desktopDir = path.join(temporaryHome, 'profiles', 'desktop')

@@ -24,7 +24,7 @@
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "node -e \"require('node:fs').rmSync('dist-electron',{recursive:true,force:true})\" && tsc --noEmit && vite build",
     "test": "vitest run",
     "preview": "vite preview --host 127.0.0.1",
     "package:win": "npm run build && electron-builder --win portable"
