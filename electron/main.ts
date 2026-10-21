@@ -298,6 +298,42 @@ function createServices(): Services {
           if (sourceSpecs.has(packageName)) continue
           const candidate = siblingManifest.dependencies?.[packageName]
           if (typeof candidate !== 'string' || candidate.trim() === '' || candidate.trim() === '*') continue
+          // 兄弟 Profile 磁盘上已经装好的实体是最可靠的来源：离线环境里
+          // registry metadata 和 git 都可能不可达，只有实体一定能复用。
+          const installedDirectory = path.join(profileRoot, sibling.name, 'node_modules', ...packageName.split('/'))
+          let installedVersion = ''
+          try {
+            const installedManifest = JSON.parse(await readFile(path.join(installedDirectory, 'package.json'), 'utf8')) as { version?: unknown }
+            if (typeof installedManifest.version === 'string' && installedManifest.version.trim().length > 0) installedVersion = installedManifest.version.trim()
+          } catch {
+            installedVersion = ''
+          }
+          if (installedVersion.length > 0) {
+            if (candidate.startsWith('file:') || /^(?:github:|git\+|https?:)/.test(candidate.trim())) {
+              // github:/git+/https 来源在断网时必然失败（git ls-remote 连不上）。
+              // 兄弟那份实体已经在磁盘上，搬进共享插件池并改成 file: 引用。
+              const safeVersion = installedVersion.replace(/[^0-9A-Za-z._+-]/g, '_')
+              const sharedSource = path.join(current.dshHome, '.dsh-launcher-plugin-bodies', ...packageName.split('/'), safeVersion)
+              if (path.resolve(installedDirectory) !== path.resolve(sharedSource)) {
+                await mkdir(path.dirname(sharedSource), { recursive: true })
+                try {
+                  await readFile(path.join(sharedSource, 'package.json'), 'utf8')
+                } catch {
+                  // node_modules 由 pnpm 在目标 Profile 里重建，复制时排除掉。
+                  await cp(installedDirectory, sharedSource, {
+                    recursive: true,
+                    filter: source => !source.split(path.sep).includes('node_modules'),
+                  })
+                }
+              }
+              sourceSpecs.set(packageName, `file:${sharedSource}`)
+            } else {
+              // registry 来源：锁定成兄弟实际安装的精确版本。范围 spec 会让
+              // pnpm 解析到 store 里没有的新版本，--offline 就会整单失败。
+              sourceSpecs.set(packageName, installedVersion)
+            }
+            continue
+          }
           if (candidate.startsWith('file:')) {
             const rawPath = candidate.slice('file:'.length)
             const sourcePath = path.isAbsolute(rawPath) ? rawPath : path.resolve(path.dirname(siblingManifestPath), rawPath)
@@ -334,7 +370,13 @@ function createServices(): Services {
           for (const packageName of missing) {
             const currentSpec = dependencies[packageName]
             const sourceSpec = sourceSpecs.get(packageName)
-            if (!sourceSpec || (currentSpec && currentSpec !== '*' && !/[<>=*^~]/.test(currentSpec))) continue
+            // 范围 spec、`*` 和远端来源（github:/git+/https）都可以被本地来源替换；
+            // 只有用户写死的精确版本才保持原样。
+            const replaceable = currentSpec === undefined
+              || currentSpec === '*'
+              || /[<>=*^~]/.test(currentSpec)
+              || /^(?:github:|git\+|https?:)/.test(currentSpec)
+            if (!sourceSpec || !replaceable) continue
             dependencies[packageName] = sourceSpec
             repaired.push(`${packageName} → ${sourceSpec}`)
           }
@@ -379,7 +421,30 @@ function createServices(): Services {
               inactivityTimeoutMs: 5 * 60 * 1000,
               onOutput: (text, level) => events.output('plugin', level, text),
             })
-            if (result.exitCode !== 0) throw new Error(`插件「${packageName}」无法从共享插件池补齐，请检查来源记录。`)
+            if (result.exitCode !== 0) {
+              // 共享池缺 tarball 时不要直接放弃：registry 通常仍然可达，
+              // 在线补齐一次，用户不必自己去手敲 pnpm。
+              events.output('plugin', 'info', `共享插件池离线安装未完成，改用在线 registry 补齐（${packageName}）。`)
+              const retry = await runCommand(offlinePnpm.executable, ['install', '--dir', targetProfileDir, '--no-frozen-lockfile', '--config.auto-install-peers=false', '--store-dir', pluginStoreRoot], {
+                cwd: targetProfileDir,
+                env: withGitOnPath(withExecutableDirectoryOnPath(offlinePnpm.executable, withExecutableDirectoryOnPath(offlineNode.node, {
+                  ...process.env,
+                  DSH_HOME: current.dshHome,
+                  npm_config_store_dir: pluginStoreRoot,
+                  NPM_CONFIG_STORE_DIR: pluginStoreRoot,
+                  pnpm_config_store_dir: pluginStoreRoot,
+                  PNPM_CONFIG_STORE_DIR: pluginStoreRoot,
+                  CI: 'true',
+                  npm_config_yes: 'true',
+                  NPM_CONFIG_YES: 'true',
+                  PNPM_CONFIG_YES: 'true',
+                  COREPACK_ENABLE_DOWNLOAD_PROMPT: '0',
+                }))),
+                inactivityTimeoutMs: 10 * 60 * 1000,
+                onOutput: (text, level) => events.output('plugin', level, text),
+              })
+              if (retry.exitCode !== 0) throw new Error(`插件「${packageName}」补齐失败：共享插件池与 registry 都没有可用来源。`)
+            }
           }
           continue
         }

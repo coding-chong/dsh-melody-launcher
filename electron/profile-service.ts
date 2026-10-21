@@ -693,8 +693,13 @@ export async function switchProfile(options: ProfileServiceOptions, profileName:
   // Materialize links for packages that already exist in another Profile or
   // the shared body pool without requiring a second confirmation dialog.
   const locallyAvailable = await locallyAvailableDependencies(dshHome, profileName, initialMissing)
+  let autoRepairError = ''
   if (locallyAvailable.length > 0 && options.fillMissingDependencies) {
-    await options.fillMissingDependencies(profileName, locallyAvailable).catch(() => undefined)
+    // 静默吞掉这里的失败，用户最终只会看到「缺少插件」，完全不知道是
+    // pnpm/git 挂了。记住原因，附到最终错误里。
+    await options.fillMissingDependencies(profileName, locallyAvailable).catch(error => {
+      autoRepairError = error instanceof Error ? error.message : String(error)
+    })
   }
   const missing = profile.initialized ? await missingDependencies(await readProfile(dshHome, profileName, options.pluginReceiptsPath)) : []
   if (missing.length > 0) {
@@ -703,7 +708,12 @@ export async function switchProfile(options: ProfileServiceOptions, profileName:
       : fillMissing === true && options.fillMissingDependencies
         ? (items: string[]) => options.fillMissingDependencies!(profileName, items)
         : null
-    if (!repair) throw new Error(`Profile「${profileName}」缺少插件：${missing.join('、')}。确认补齐依赖后再切换。`)
+    if (!repair) {
+      const reason = autoRepairError.length > 0
+        ? `自动补齐失败：${autoRepairError}`
+        : '确认补齐依赖后再切换。'
+      throw new Error(`Profile「${profileName}」缺少插件：${missing.join('、')}。${reason}`)
+    }
     await repair(missing)
     const afterRepair = await missingDependencies(await readProfile(dshHome, profileName, options.pluginReceiptsPath))
     if (afterRepair.length > 0) throw new Error(`Profile「${profileName}」仍缺少插件：${afterRepair.join('、')}`)

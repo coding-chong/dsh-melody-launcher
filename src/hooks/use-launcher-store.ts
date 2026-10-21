@@ -849,12 +849,29 @@ export function useLauncherStore() {
       return undefined
     }
     const next = await run(`profile-switch:${profileName}`, async () => {
-      const result = await api.switchProfile(profileName, { fillMissing })
-      setSettings(result)
-      await refreshProfile()
-      await refreshProfiles()
-      await refreshProfileScopedState()
-      return result
+      const attempt = async (fill: boolean) => {
+        const result = await api.switchProfile(profileName, { fillMissing: fill })
+        setSettings(result)
+        await refreshProfile()
+        await refreshProfiles()
+        await refreshProfileScopedState()
+        return result
+      }
+      try {
+        return await attempt(fillMissing)
+      } catch (error) {
+        // 前端的 profiles 快照可能早于刚创建/克隆出来的 Profile：当时它还没有
+        // 缺失依赖，主进程现在却判定为缺失。这不是用户取消，而是快照过期，
+        // 所以再问一次并带着补齐重试，而不是把原始 IPC 错误糊到屏幕上。
+        const message = error instanceof Error ? error.message : String(error)
+        if (fillMissing || !message.includes('缺少插件')) throw error
+        const proceed = typeof window !== 'undefined' && window.confirm(`Profile「${profileName}」缺少依赖，是否从来源记录补齐后切换？`)
+        if (!proceed) {
+          setInstallProgress(null)
+          return undefined
+        }
+        return await attempt(true)
+      }
     }, { success: `已切换到 Profile「${profileName}」。` })
     // 依赖补齐由主进程复用安装进度事件；如果安装在准备阶段失败，
     // 某些旧版本/第三方安装器可能来不及发送 error 终态。切换请求已经
