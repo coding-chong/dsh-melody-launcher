@@ -11,6 +11,7 @@ import { createApplicationAddonManager, type ApplicationAddonManager } from './a
 import { applyWindowMode, applyWindowModeImmediate, createMainWindow, createRendererChannel } from './app-window'
 import { createCatalogSyncService, type CatalogSyncService } from './catalog-sync'
 import { createCopilotSessionManager, type CopilotSessionManager } from './copilot-sessions'
+import { copyPluginBody } from './plugin-body-copy'
 import { createDshMarketService, type DshMarketService } from './dsh-market'
 import { runCommand } from './command'
 import { readDeepSeekApiKey } from './credentials'
@@ -309,7 +310,7 @@ function createServices(): Services {
             installedVersion = ''
           }
           if (installedVersion.length > 0) {
-            if (candidate.startsWith('file:') || /^(?:github:|git\+|https?:)/.test(candidate.trim())) {
+            if (/^(?:github:|git\+|https?:)/.test(candidate.trim())) {
               // github:/git+/https 来源在断网时必然失败（git ls-remote 连不上）。
               // 兄弟那份实体已经在磁盘上，搬进共享插件池并改成 file: 引用。
               const safeVersion = installedVersion.replace(/[^0-9A-Za-z._+-]/g, '_')
@@ -319,20 +320,23 @@ function createServices(): Services {
                 try {
                   await readFile(path.join(sharedSource, 'package.json'), 'utf8')
                 } catch {
-                  // node_modules 由 pnpm 在目标 Profile 里重建，复制时排除掉。
-                  await cp(installedDirectory, sharedSource, {
-                    recursive: true,
-                    filter: source => !source.split(path.sep).includes('node_modules'),
-                  })
+                  // 只跳过源树内部的 node_modules。源路径本身就在
+                  // `profiles/<name>/node_modules/` 下，拿绝对路径去判断会把
+                  // 复制根目录一起拒掉，结果是什么都没复制的空目录引用。
+                  await copyPluginBody(installedDirectory, sharedSource)
                 }
               }
               sourceSpecs.set(packageName, `file:${sharedSource}`)
-            } else {
+              continue
+            }
+            if (!candidate.startsWith('file:')) {
               // registry 来源：锁定成兄弟实际安装的精确版本。范围 spec 会让
               // pnpm 解析到 store 里没有的新版本，--offline 就会整单失败。
               sourceSpecs.set(packageName, installedVersion)
+              continue
             }
-            continue
+            // file: 来源继续走下面的原有分支：引用用户的源目录，跟随源码更新。
+            // 把它快照进共享池会让「改源码重新构建」不再生效。
           }
           if (candidate.startsWith('file:')) {
             const rawPath = candidate.slice('file:'.length)
