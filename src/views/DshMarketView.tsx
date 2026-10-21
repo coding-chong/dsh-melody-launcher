@@ -110,6 +110,9 @@ export const DshMarketView = memo(function DshMarketView({ active = true, profil
     try {
       if (action === 'install') await api.installDshMarketPlugin(plugin.npm ?? plugin.name)
       else if (action === 'update') await api.updateDshMarketPlugin(plugin.npm ?? plugin.name)
+      // 市场页刻意不弹作用域选择：这里的语义就是「从市场视角彻底清掉」，一键到底。
+      // 想保留插件本体、只从当前 Profile 摘掉，请去「插件」页用那一行的 🗑——
+      // 那里会问你作用域。不要为了「统一」把这两处合成一个确认框。
       else if (action === 'uninstall') await api.uninstallPlugin(plugin.npm ?? plugin.name, { purgeStore: true })
       else await api.toggleDshMarketPlugin(plugin.npm ?? plugin.name, enabled === true)
       // The market service and startup-item manager share the same Profile on
