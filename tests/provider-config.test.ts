@@ -72,6 +72,17 @@ describe('provider config location', () => {
     expect(location.kind).toBe('legacy-settings')
     expect(location.filePath).toBe(path.join(temporaryHome, 'settings.yaml'))
   })
+
+  it('拒绝会把路径拼出 profiles 目录的名字', async () => {
+    await seedProfile(PROFILE_PATCH)
+    // `..` 会让 path.join 回到 dshHome 本身，把根目录的 cordis.patch.yml 当成
+    // Profile 补丁读写；`.` 与 node_modules 同理，都不能被接受。
+    for (const profileName of ['..', '.', 'node_modules', 'web.']) {
+      const location = await resolveProviderConfigLocation({ dshHome: temporaryHome, profileName })
+      expect(location.kind).toBe('legacy-settings')
+      expect(location.filePath).toBe(path.join(temporaryHome, 'settings.yaml'))
+    }
+  })
 })
 
 describe('custom API providers in the profile patch', () => {

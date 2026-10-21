@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { isMap, isScalar, isSeq, parseDocument } from 'yaml'
+import { isSafeProfileName } from './profile'
 
 /**
  * 模型路由（`llm-pi-ai.providers`）的权威位置随 DSH 版本移动：
@@ -18,7 +19,6 @@ export const PI_AI_ENTRY_NAME = '@deepseek-ai/dsh-llm-pi-ai'
 
 const PROFILE_PATCH_FILENAME = 'cordis.patch.yml'
 const LEGACY_SETTINGS_FILENAME = 'settings.yaml'
-const PROFILE_NAME_PATTERN = /^[A-Za-z0-9._-]+$/
 
 export type ProviderConfigKind = 'profile-patch' | 'legacy-settings'
 
@@ -92,7 +92,9 @@ export async function resolveProviderConfigLocation(
 ): Promise<ProviderConfigLocation> {
   const { dshHome, profileName } = normalizeProviderTarget(target)
   const name = typeof profileName === 'string' ? profileName.trim() : ''
-  if (name && PROFILE_NAME_PATTERN.test(name)) {
+  // 复用 profile.ts 的严格规则。原来的宽松正则会让 `..` 拼出 dshHome 本身，把根
+  // 目录的 cordis.patch.yml 当成 Profile 补丁读写；也会放过 `.` 与 node_modules。
+  if (isSafeProfileName(name)) {
     const profileDirectory = path.join(dshHome, 'profiles', name)
     if (await pathExistsAsDirectory(profileDirectory)) {
       return { kind: 'profile-patch', filePath: path.join(profileDirectory, PROFILE_PATCH_FILENAME) }
