@@ -680,6 +680,21 @@ describe('remove with profileName', () => {
     expect(removePluginReceipt).toHaveBeenCalledWith(expect.any(String), 'tui', 'some-plugin')
   })
 
+  it('purgeStore 为 false 时即使指定 Profile 也不碰其他 Profile', async () => {
+    await mkdir(path.join(settings.dshHome, 'profiles', 'web'), { recursive: true })
+    await mkdir(path.join(settings.dshHome, 'profiles', 'tui'), { recursive: true })
+    vi.mocked(readProfile).mockImplementation(async (_dshHome, profileName) => profileState(profileName, 'some-plugin'))
+    const { installer } = createTestInstaller()
+
+    await installer.remove('some-plugin', 'web', { purgeStore: false })
+
+    // 「仅从当前 Profile 移除」的语义基础：另一个 Profile 的引用必须原样保留，
+    // 共享缓存也不能回收。缺少 profileName 会退化成全量移除，这条守住那个边界。
+    expect(removePluginFromProfile).toHaveBeenCalledWith(settings.dshHome, 'web', 'some-plugin')
+    expect(removePluginFromProfile).not.toHaveBeenCalledWith(settings.dshHome, 'tui', 'some-plugin')
+    expect(purgeStoreCalls).toHaveLength(0)
+  })
+
   it('彻底清除即使指定来源 Profile 也会同步清理所有 Profile', async () => {
     await mkdir(path.join(settings.dshHome, 'profiles', 'web'), { recursive: true })
     await mkdir(path.join(settings.dshHome, 'profiles', 'tui'), { recursive: true })

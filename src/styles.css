@@ -3759,9 +3759,10 @@ input:focus-visible {
   min-width: 0;
 }
 
+/* 最后一列要装下 4 个 27px 图标按钮（含 2px gap = 114px），三按钮时代是 90px。 */
 .plugin-row {
   display: grid;
-  grid-template-columns: 48px 44px minmax(140px, 0.9fr) minmax(130px, 1.1fr) 65px 90px;
+  grid-template-columns: 48px 44px minmax(140px, 0.9fr) minmax(130px, 1.1fr) 65px 118px;
   min-width: 0;
   min-height: 40px;
   align-items: center;
@@ -4048,7 +4049,7 @@ input:focus-visible {
 
 /* Row-level uninstall: stays quiet until hover, then reads as destructive. */
 .row-actions button.row-danger:hover:not(:disabled) {
-  color: #b3261e;
+  color: var(--danger);
   background: #fdeceb;
 }
 

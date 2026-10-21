@@ -769,9 +769,16 @@ export function useLauncherStore() {
     // Profile 消失，差别在于是否牵连别的 Profile 和磁盘缓存。
     const purgeStore = mode === 'purge'
     const currentProfile = settings?.profileName
+    // installer.remove 把「没有 profileName」当成「所有 Profile」：purgeStore 为
+    // false 但缺 profileName 时会静默地从每个 Profile 解除引用。用户选了最轻的
+    // 那一档，绝不能退化成危险的那一档，所以拿不到 Profile 名就不发请求。
+    if (!purgeStore && !currentProfile) {
+      showToast({ kind: 'error', message: '无法确定当前 Profile，已取消卸载。' })
+      return
+    }
     const request = purgeStore
       ? { purgeStore: true }
-      : { purgeStore: false, ...(currentProfile ? { profileName: currentProfile } : {}) }
+      : { purgeStore: false, profileName: currentProfile! }
     const next = await run(plugin.packageName, () => api.uninstallPlugin(plugin.packageName, request), {
       success: purgeStore
         ? `${plugin.displayName} 已彻底清除，未引用的源码与 pnpm 缓存也已清理。`
