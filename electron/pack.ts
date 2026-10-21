@@ -54,8 +54,10 @@ import {
 import {
   buildInstallResult,
   guardPackStart,
+  planLocalBatch,
   runSerialInstall,
   type InstallableItem,
+  type SerialInstallResult,
 } from './pack-orchestration'
 import { readPluginReceipts, removePluginReceipt, type PluginInstallReceipt } from './plugin-receipts'
 import { readPresetReceipts, type PresetInstallReceipt } from './preset-receipts'
@@ -71,6 +73,11 @@ export type PackInstallTarget = PluginInstallTarget & { repository?: string; def
 /** pack 管理器依赖的最小 installer 面（main.ts 组装真实 Installer，测试注入 stub）。 */
 export interface InstallInstaller {
   installPluginTarget(target: PackInstallTarget, profileOverride?: string): Promise<unknown>
+  /**
+   * 批量安装离线本体（整包导入用）：一次装完整批，失败时内部回退逐个定位。
+   * 缺省时 pack 层退回 `installPluginTarget` 单发，行为不变。
+   */
+  installLocalBatch?(targets: PackInstallTarget[]): Promise<{ installed: string[]; failures: { packageName: string; reason: string }[] }>
   installNpmPackage?(request: { packageName: string; version?: string; repository?: string; approvedBuildKeys?: string[]; deniedBuildKeys?: string[] }, profileOverride?: string): Promise<unknown>
   /** raw 整合包导入的技能：从本地源目录/单文件全局安装到 dshHome/skills。 */
   installSkillLocal(dshHome: string, skill: { name: string; format: 'bundle' | 'flat'; sourceDir: string }): Promise<unknown>
@@ -459,6 +466,56 @@ export function createPackManager(options: PackManagerOptions): PackManager {
     active = true
     snapshot = null
     profileWasNew = false
+  }
+
+  /** 离线本体批量预取结果：packageName → 失败原因（null 表示已批量装好）。 */
+  const localBatchOutcome = new Map<string, string | null>()
+
+  /**
+   * 串行安装前的一次批量预取：同 Profile 的离线本体并成一条 pnpm add，依赖树
+   * 只解析一遍。命中的项在各自闭包里直接取结果，UI 仍然逐个显示；没命中
+   * （单成员组、批量通道缺失、批量整体报错）则各自回退单发。
+   */
+  async function prefetchLocalBatch(installables: InstallableItem[]): Promise<void> {
+    localBatchOutcome.clear()
+    const batch = options.installer.installLocalBatch
+    if (!batch) return
+    const targets = installables
+      .filter(item => Boolean(item.localTarget?.localDirectory))
+      .map(item => ({ packageName: item.packageName, ...item.localTarget! }))
+    for (const group of planLocalBatch(targets)) {
+      try {
+        const outcome = await batch(group as PackInstallTarget[])
+        for (const name of outcome.installed) localBatchOutcome.set(name, null)
+        for (const failure of outcome.failures) localBatchOutcome.set(failure.packageName, failure.reason)
+      } catch (error) {
+        // 批量通道本身出错时一条都不记，逐项闭包会回退到单发。
+        options.emitOutput?.('info', `离线本体批量安装未完成，改为逐个安装：${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+  }
+
+  /** 统一入口：先批量预取，再按原语义串行（保留 item-start/item-done 事件）。 */
+  async function runInstallables(installables: InstallableItem[]): Promise<SerialInstallResult> {
+    await prefetchLocalBatch(installables)
+    return runSerialInstall(installables, { emitEvent: options.emitEvent })
+  }
+
+  /** 离线本体项：已批量预取就取结果，否则回退单发。 */
+  function localInstallable(target: PackInstallTarget): InstallableItem {
+    return {
+      packageName: target.packageName,
+      offline: true,
+      localTarget: { localDirectory: target.localDirectory, profileName: target.profileName },
+      install: async () => {
+        if (localBatchOutcome.has(target.packageName)) {
+          const reason = localBatchOutcome.get(target.packageName)
+          if (reason) throw new Error(reason)
+          return
+        }
+        await installManifestPlugin(target)
+      },
+    }
   }
 
   const log = (level: 'info' | 'error' | 'success', text: string): void => {
@@ -892,7 +949,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
             }
           })
           options.emitEvent({ kind: 'status', message: `正在导入整合包清单「${manifest.name}」…` })
-          const { installed, failures } = await runSerialInstall(installables, { emitEvent: options.emitEvent })
+          const { installed, failures } = await runInstallables(installables)
           if (!options.unifiedProfiles) await reapplyCurrentSelection(settings, profileBeforeInstall)
           const installedPluginNames = selected
             .filter(entry => installed.includes(entry.packageName))
@@ -987,7 +1044,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
                 nodeRange: null,
                 localDirectory: sharedBodyDir,
               }
-              installables.push({ packageName: plugin.packageName, offline: true, install: async () => { await installManifestPlugin(target) } })
+              installables.push(localInstallable(target))
             }
           }
 
@@ -1020,7 +1077,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
             }
           }
 
-          const { installed, failures } = await runSerialInstall(installables, { emitEvent: options.emitEvent })
+          const { installed, failures } = await runInstallables(installables)
           if (!options.unifiedProfiles) await reapplyCurrentSelection(settings, profileBeforeInstall)
           const result = buildInstallResult(packId, installed, failures)
 
@@ -1152,7 +1209,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
                 nodeRange: null,
                 localDirectory: sharedBodyDir,
               }
-              installables.push({ packageName, offline: true, install: async () => { await installManifestPlugin(target) } })
+              installables.push(localInstallable(target))
             } else if (importOptions?.mode === 'full') {
               installables.push({ packageName, offline: true, install: async () => { throw new Error(`完整安装缺少插件本体：${packageName}`) } })
             } else {

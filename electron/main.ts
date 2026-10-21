@@ -635,13 +635,18 @@ function createServices(): Services {
    * 真实 installer 的 installPluginTarget 只接受 GitHub 仓库分析，无法直接
    * 安装本地目录，因此这里在组装层用 DSH CLI 插件命令补上最小通路。
    */
-  async function installPackLocalDirectory(target: PackInstallTarget): Promise<void> {
-    const localDirectory = validateLocalPluginDirectory(target.localDirectory)
+  /**
+   * 一次 `dsh plugin add` 命令，可传多个 `file:` specifier。整包导入时把所有
+   * 离线本体并成一条，依赖树只解析一遍（串行单发会把同一棵树解析 N 遍，越到
+   * 后面越慢）。
+   */
+  async function runLocalPluginAdd(directories: string[], profileName?: string): Promise<{ exitCode: number; diagnostics: string }> {
     const current = await settings.read()
     const nodeRuntime = await prepareNodeRuntime('plugin')
     const pnpmRuntime = await preparePnpmRuntime('plugin', nodeRuntime)
     const executable = resolveNodeExecutable(current.launchExecutable, nodeRuntime)
-    const commandArgs = buildPluginCommandArgs(current, executable, ['add', `file:${localDirectory}`], target.profileName)
+    const specs = directories.map(directory => `file:${directory}`)
+    const commandArgs = buildPluginCommandArgs(current, executable, ['add', ...specs], profileName)
     const result = await runCommand(executable, commandArgs, {
       cwd: current.workspace,
         env: withGitOnPath(withExecutableDirectoryOnPath(
@@ -664,7 +669,11 @@ function createServices(): Services {
       inactivityTimeoutMs: 5 * 60 * 1000,
       onOutput: (text, level) => events.output('plugin', level, text),
     })
-    if (result.exitCode !== 0) throw new Error(`插件安装失败（代码 ${result.exitCode}），请查看运行日志。`)
+    return { exitCode: result.exitCode, diagnostics: result.output.slice(-4_000).trim() }
+  }
+
+  /** 回执里的版本从本体 package.json 读；读不到记 null（允许）。 */
+  async function recordPackLocalInstall(target: PackInstallTarget, localDirectory: string): Promise<void> {
     let version: string | null = null
     try {
       const packageManifest = JSON.parse(await readFile(path.join(localDirectory, 'package.json'), 'utf8')) as { version?: unknown }
@@ -682,10 +691,60 @@ function createServices(): Services {
       commit: '',
       installedAt: new Date().toISOString(),
     })
-    await consolidatePluginPool(current.dshHome)
+  }
+
+  async function installPackLocalDirectory(target: PackInstallTarget): Promise<void> {
+    const localDirectory = validateLocalPluginDirectory(target.localDirectory)
+    const { exitCode, diagnostics } = await runLocalPluginAdd([localDirectory], target.profileName)
+    if (exitCode !== 0) throw new Error(`插件安装失败（代码 ${exitCode}）。${diagnostics || '请查看运行日志。'}`)
+    await recordPackLocalInstall(target, localDirectory)
+    await consolidatePluginPool((await settings.read()).dshHome)
+  }
+
+  /**
+   * 整包导入的离线本体批量安装。一次 pnpm add 把整批 `file:` 装进去，依赖树只
+   * 解析一遍；批量失败时回退逐个重装，只为拿到「哪一个坏了」——单个失败不会
+   * 被整批拖下水。
+   */
+  async function installPackLocalDirectories(targets: PackInstallTarget[]): Promise<{ installed: string[]; failures: { packageName: string; reason: string }[] }> {
+    const valid = targets.filter(target => target.localDirectory)
+    if (valid.length === 0) return { installed: [], failures: [] }
+    if (valid.length === 1) {
+      const only = valid[0]
+      try {
+        await installPackLocalDirectory(only)
+        return { installed: [only.packageName], failures: [] }
+      } catch (error) {
+        return { installed: [], failures: [{ packageName: only.packageName, reason: error instanceof Error ? error.message : String(error) }] }
+      }
+    }
+    const directories = valid.map(target => validateLocalPluginDirectory(target.localDirectory))
+    const profileName = valid[0].profileName
+    // 一次 pnpm add 只能落到一个 Profile；跨 Profile 的分组由调用方拆开。
+    if (valid.every(target => target.profileName === profileName)) {
+      const { exitCode, diagnostics } = await runLocalPluginAdd(directories, profileName)
+      if (exitCode === 0) {
+        for (const [index, target] of valid.entries()) await recordPackLocalInstall(target, directories[index])
+        await consolidatePluginPool((await settings.read()).dshHome)
+        return { installed: valid.map(target => target.packageName), failures: [] }
+      }
+      events.output('plugin', 'info', `批量安装未完成（代码 ${exitCode}），改为逐个安装以定位失败项。${diagnostics ? `\n${diagnostics}` : ''}`)
+    }
+    const installed: string[] = []
+    const failures: { packageName: string; reason: string }[] = []
+    for (const target of valid) {
+      try {
+        await installPackLocalDirectory(target)
+        installed.push(target.packageName)
+      } catch (error) {
+        failures.push({ packageName: target.packageName, reason: error instanceof Error ? error.message : String(error) })
+      }
+    }
+    return { installed, failures }
   }
 
   const packInstaller: InstallInstaller = {
+    installLocalBatch: targets => installPackLocalDirectories(targets),
     async installPluginTarget(target, profileOverride) {
       if (target.source === 'local-directory') {
         await installPackLocalDirectory(target)

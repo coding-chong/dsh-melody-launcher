@@ -20,6 +20,11 @@ export type InstallableItem = {
   packageName: string
   install: () => Promise<void>
   offline?: boolean
+  /**
+   * 离线本体的落盘位置与目标 Profile。pack 层据此把同 Profile 的多项并成一次
+   * pnpm add；结构类型，避免与 pack.ts 的 PackInstallTarget 相互引用。
+   */
+  localTarget?: { localDirectory?: string; profileName?: string }
 }
 
 export type SerialInstallHooks = {
@@ -89,13 +94,39 @@ export function buildInstallResult(
   return { id, installed, failures, state }
 }
 
+/** 可并成一次 `pnpm add` 的离线本体候选：只需要知道装进哪个 Profile。 */
+export type LocalBatchCandidate = {
+  packageName: string
+  profileName?: string
+}
+
+/**
+ * 把离线本体按 Profile 分组，只返回能批量安装的组（≥2 个成员）。
+ *
+ * 批量安装的收益来自「一次 pnpm 解析整个依赖树」：单发 N 次会把同一棵树解析
+ * N 遍，越到后面越慢。但一次 pnpm 只能装进一个 Profile，跨 Profile 的目标必须
+ * 分开，所以按 profileName 分组；单成员组没有收益，交回调用方走单发。
+ */
+export function planLocalBatch<T extends LocalBatchCandidate>(targets: T[]): T[][] {
+  const groups = new Map<string, T[]>()
+  for (const target of targets) {
+    const key = target.profileName ?? ''
+    const group = groups.get(key)
+    if (group) group.push(target)
+    else groups.set(key, [target])
+  }
+  const batches: T[][] = []
+  for (const group of groups.values()) {
+    if (group.length >= 2) batches.push(group)
+  }
+  return batches
+}
+
 export type GuardPackStartOptions = {
   isRuntimeRunning: () => boolean
   isInstallerBusy: () => boolean
   isPackBusy: () => boolean
-}
-
-/**
+}/**
  * 整合包操作启动前的互斥守卫（纯逻辑，不抛）。按优先级返回首个拒绝原因：
  *   1) DSH 运行时正在运行；
  *   2) 普通安装器忙；
