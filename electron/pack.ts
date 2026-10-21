@@ -709,7 +709,9 @@ export function createPackManager(options: PackManagerOptions): PackManager {
         const record: PackRecord = {
           id: packId,
           name: request.name,
-          description: request.description ?? '',
+          // 空的 Profile 描述不能原样写进 manifest：导入校验会拒绝空 description，
+          // 于是「自己导出的包自己导不回来」。这里给一个可读的兜底文案。
+          description: request.description?.trim() || `DSH 整合包：${request.name}`,
           version: '1.0.0',
           dshVersion,
           source: 'created',
