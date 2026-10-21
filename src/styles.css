@@ -4007,6 +4007,12 @@ input:focus-visible {
   background: transparent;
 }
 
+/* Row-level uninstall: stays quiet until hover, then reads as destructive. */
+.row-actions button.row-danger:hover:not(:disabled) {
+  color: #b3261e;
+  background: #fdeceb;
+}
+
 .plugin-details {
   display: flex;
   min-width: 0;

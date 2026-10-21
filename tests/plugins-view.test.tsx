@@ -78,8 +78,7 @@ describe('PluginsView installed Web UI', () => {
     expect(document.body.textContent).not.toContain(webUi.packageName)
   })
 
-  it('keeps an installed Web UI manageable and includes it in the activation order', async () => {
-    const props = await mount(true)
+  it('keeps an installed Web UI manageable and includes it in the activation order', async () => {    const props = await mount(true)
     const row = [...document.querySelectorAll<HTMLElement>('.plugin-rows > .plugin-row')]
       .find(element => element.textContent?.includes(webUi.packageName))!
     expect(row).toBeTruthy()
@@ -96,6 +95,23 @@ describe('PluginsView installed Web UI', () => {
     const uninstall = [...document.querySelectorAll<HTMLButtonElement>('button')]
       .find(button => button.textContent === '卸载插件')!
     await act(async () => uninstall.click())
+    expect(props.onUninstall).toHaveBeenCalledWith(webUi)
+  })
+
+  it('offers a row-level uninstall while built-in layers never get one', async () => {
+    const props = await mount(true)
+    const rows = [...document.querySelectorAll<HTMLElement>('.plugin-rows > .plugin-row')]
+    const target = rows.find(element => element.textContent?.includes(webUi.packageName))!
+    const rowUninstall = target.querySelector<HTMLButtonElement>('button.row-danger')
+    expect(rowUninstall).not.toBeNull()
+    expect(rowUninstall!.getAttribute('aria-label')).toContain(webUi.displayName)
+
+    // Core composition layers are supplied by the runtime, so removal makes no
+    // sense for them and the action must not render at all.
+    const builtinRow = rows.find(element => element.textContent?.includes('@deepseek-ai/dsh-base'))!
+    expect(builtinRow.querySelector('button.row-danger')).toBeNull()
+
+    await act(async () => rowUninstall!.click())
     expect(props.onUninstall).toHaveBeenCalledWith(webUi)
   })
 })

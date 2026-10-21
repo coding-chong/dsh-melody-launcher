@@ -254,6 +254,7 @@ export function PluginsView({
                   onDragStart={() => setDragged(plugin.packageName)}
                   onDrop={() => dropAt(plugin.packageName)}
                   onOpenFolder={onOpenPluginFolder ? () => onOpenPluginFolder(plugin.packageName) : undefined}
+                  onUninstall={plugin.builtin ? undefined : () => onUninstall(plugin)}
                 />
                 )
               })}
@@ -523,7 +524,7 @@ function SkillList({ skills, selectedName, busy, locked, onSelect, onToggle }: {
   )
 }
 
-function PluginRow({ plugin, selected, busy, locked, linked, dragging, canMoveUp, canMoveDown, onSelect, onToggle, onMove, onDragStart, onDrop, onOpenFolder }: {
+function PluginRow({ plugin, selected, busy, locked, linked, dragging, canMoveUp, canMoveDown, onSelect, onToggle, onMove, onDragStart, onDrop, onOpenFolder, onUninstall }: {
   plugin: ManagedPlugin
   selected: boolean
   busy: boolean
@@ -538,6 +539,8 @@ function PluginRow({ plugin, selected, busy, locked, linked, dragging, canMoveUp
   onDragStart: () => void
   onDrop: () => void
   onOpenFolder?: () => void
+  /** Built-in composition layers never get this: they come with the runtime. */
+  onUninstall?: () => void
 }) {
   return (
     <div
@@ -584,6 +587,7 @@ function PluginRow({ plugin, selected, busy, locked, linked, dragging, canMoveUp
         <button type="button" disabled={locked || busy || !canMoveUp} onClick={() => onMove(-1)} title="向上移动" aria-label={`向上移动 ${plugin.displayName}`}><ArrowUp size={15} /></button>
         <button type="button" disabled={locked || busy || !canMoveDown} onClick={() => onMove(1)} title="向下移动" aria-label={`向下移动 ${plugin.displayName}`}><ArrowDown size={15} /></button>
         {onOpenFolder && <button type="button" disabled={busy} onClick={onOpenFolder} title="打开插件文件夹" aria-label={`打开 ${plugin.displayName} 文件夹`}><FolderOpen size={15} /></button>}
+        {onUninstall && <button type="button" className="row-danger" disabled={locked || busy} onClick={onUninstall} title="卸载插件（从本机所有 Profile 移除并清理缓存）" aria-label={`卸载 ${plugin.displayName}`}><Trash2 size={15} /></button>}
       </div>
     </div>
   )
