@@ -733,10 +733,10 @@ function LauncherShell() {
         <ConfirmDialog
           plugin={confirmingRemoval}
           onCancel={() => setConfirmingRemoval(null)}
-          onConfirm={() => {
+          onConfirm={mode => {
             const plugin = confirmingRemoval
             setConfirmingRemoval(null)
-            void store.uninstallPlugin(plugin)
+            void store.uninstallPlugin(plugin, mode)
           }}
         />
       )}

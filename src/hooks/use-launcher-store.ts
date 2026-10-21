@@ -763,9 +763,19 @@ export function useLauncherStore() {
     if (next) setProfile(next)
   }, [api, profile, run, showToast])
 
-  const uninstallPlugin = useCallback(async (plugin: ManagedPlugin) => {
-    const next = await run(plugin.packageName, () => api.uninstallPlugin(plugin.packageName, { purgeStore: true }), {
-      success: `${plugin.displayName} 已彻底清除，未引用的源码与 pnpm 缓存也已清理。`,
+  const uninstallPlugin = useCallback(async (plugin: ManagedPlugin, mode: 'profile' | 'purge' = 'purge') => {
+    // 'profile' 只解除当前 Profile 的依赖与激活引用，插件本体留在共享池；
+    // 'purge' 才跨所有 Profile 清除并回收共享缓存。两者都能让插件从当前
+    // Profile 消失，差别在于是否牵连别的 Profile 和磁盘缓存。
+    const purgeStore = mode === 'purge'
+    const currentProfile = settings?.profileName
+    const request = purgeStore
+      ? { purgeStore: true }
+      : { purgeStore: false, ...(currentProfile ? { profileName: currentProfile } : {}) }
+    const next = await run(plugin.packageName, () => api.uninstallPlugin(plugin.packageName, request), {
+      success: purgeStore
+        ? `${plugin.displayName} 已彻底清除，未引用的源码与 pnpm 缓存也已清理。`
+        : `${plugin.displayName} 已从当前 Profile 移除，插件本体仍保留在共享池。`,
       // Profile 清理先于 pnpm store prune；如果缓存维护失败，仍要把已经
       // 完成的本地卸载反映到界面，避免用户误以为插件仍然存在。
       onError: error => {
