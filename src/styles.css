@@ -319,8 +319,13 @@ input:focus-visible {
   overflow: hidden;
   color: #f8faf7;
   background-color: #20231f;
-  /* 自定义插图由 App.tsx 写入 --launcher-background-image（launcher-asset://）。 */
-  background-image: var(--launcher-background-image, url('/launcher-background.png'));
+  /* 自定义插图由 App.tsx 写入 --launcher-background-image（launcher-asset://）。
+     兜底图用相对路径且带 `../`：public/ 的图落在 dist 根，而打包后的 CSS 在
+     dist/assets/ 下，不上去一级会指向 dist/assets/launcher-background0.png；
+     dev 下 CSS 来自 /src/，`../` 正好回到 public 根。文件名也要和 public/ 一致
+     —— 原写法 `/launcher-background.png`（带盘符根且少了 0）在 file:// 下永远
+     404。 */
+  background-image: var(--launcher-background-image, url('../launcher-background0.png'));
   background-position: center;
   background-size: cover;
 }

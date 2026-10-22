@@ -56,7 +56,10 @@ export function WheelchairHome({
     <div className="launcher-home">
       <section className="home-brand">
         <div className="home-brand-head">
-          <img className="home-brand-logo" src="/launcher-logo.png" alt="" width={112} height={112} draggable={false} />
+          {/* public/ 下的资源必须用相对路径：生产环境走 loadFile，文档 URL 是
+              file:///…/dist/index.html，`/launcher-logo.png` 会被解析成盘符根
+              file:///launcher-logo.png，图片 404 只剩破图。 */}
+          <img className="home-brand-logo" src="launcher-logo.png" alt="" width={112} height={112} draggable={false} />
           <h1 className="home-brand-name">
             <strong>DSH</strong>
             <span>Melody Launcher</span>
