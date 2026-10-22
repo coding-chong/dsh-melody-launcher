@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { TopBar } from '../components/TopBar'
+import { ScrollHint } from '../components/ScrollHint'
 import { WheelchairHome } from './WheelchairHome'
 import { SettingsPanels } from '../views/SettingsView'
 import { useLauncherApi } from '../api/client'
@@ -128,6 +129,7 @@ export function WheelchairMode({ store, flip, onImportPack, onOpenLauncherUpdate
           />
         )}
       </div>
+      {activeTab === 'start' && <ScrollHint direction="up" label="向上滚动返回原版界面" />}
     </div>
   )
 }

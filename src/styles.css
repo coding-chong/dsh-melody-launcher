@@ -3838,6 +3838,41 @@ input:focus-visible {
   white-space: nowrap;
 }
 
+/* 滚轮翻页提示：两套界面之间是纯手势切换，没有任何按钮对应，不写出来用户既
+   发现不了也回不去。淡色常驻 + 轻微呼吸，不抢视觉。 */
+.scroll-hint {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  z-index: 40;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 13px;
+  border-radius: 999px;
+  background: rgb(24 32 28 / 55%);
+  color: #f2f7f3;
+  font-size: 12px;
+  letter-spacing: 0.2px;
+  pointer-events: none;
+  transform: translateX(-50%);
+  animation: scroll-hint-breathe 3.2s ease-in-out infinite;
+}
+
+@keyframes scroll-hint-breathe {
+  0%,
+  100% { opacity: 0.55; }
+
+  50% { opacity: 0.9; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scroll-hint {
+    opacity: 0.7;
+    animation: none;
+  }
+}
+
 .plugin-row.dragging {
   opacity: 0.45;
 }

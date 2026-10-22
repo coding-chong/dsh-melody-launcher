@@ -11,6 +11,7 @@ import { WheelchairMode } from './wheelchair/WheelchairMode'
 import './wheelchair/flip.css'
 import { Toast } from './components/Toast'
 import { ConfirmDialog } from './components/dialogs/ConfirmDialog'
+import { ScrollHint } from './components/ScrollHint'
 import { CredentialDialog } from './components/dialogs/CredentialDialog'
 import { GitHubAccountDialog } from './components/dialogs/GitHubAccountDialog'
 import { CreatePackDialog } from './components/dialogs/CreatePackDialog'
@@ -393,6 +394,7 @@ function LauncherShell() {
             onToggleMaximize={toggleMaximizeWindow}
             onClose={closeWindow}
           />
+          <ScrollHint direction="down" label="向下滚动进入 DML 模式" />
         </div>
         {managerVisited.current && (
           <div className={`surface-host manager-surface-host ${navigation.surface === 'manager' && !wheelchairMode ? '' : 'view-hidden'}`}>
