@@ -116,7 +116,7 @@ describe('combined resource market', () => {
     const install = [...panel('market').querySelectorAll<HTMLButtonElement>('button')]
       .find(button => button.textContent === '安装')!
     await act(async () => install.click())
-    expect(installDshMarketPlugin).toHaveBeenCalledWith('demo-plugin')
+    expect(installDshMarketPlugin).toHaveBeenCalledWith('demo-plugin', undefined, undefined, 'https://github.com/demo/demo-plugin')
     await act(async () => tab('repositories').click())
     expect(loadDshMarket).toHaveBeenCalledTimes(1)
     await act(async () => { finishInstall(catalog.plugins) })

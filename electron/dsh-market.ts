@@ -127,6 +127,46 @@ export function findDshMarketInstalledAlias(entry: { name: string; url: string; 
   return null
 }
 
+/** 市场条目的身份：`url` 唯一，`name`/`npm` 会重复（目录里有 4 个 `dsh-pet`）。 */
+export interface DshMarketEntryIdentity {
+  name?: string | null
+  url?: string | null
+}
+
+/**
+ * 在精选目录里按「你点的那张卡片」定位条目。
+ *
+ * 目录里同名条目大量存在（`dsh-pet` 有 4 个 owner），多个条目还会共用同一个 npm 包名。
+ * 只凭名字 `find(item => item.name === name || item.npm === name)` 会命中最靠前的那一条，
+ * 于是「点 A 卡片装上了 B 仓库」。`url` 是目录项自己的唯一身份，必须优先用它；
+ * 只有名字、又确实撞名时，宁可报错也不猜。
+ */
+export function findDshMarketRegistryEntry<T extends { name: string; owner?: string; url: string; npm?: string | null }>(
+  entries: readonly T[],
+  identity: DshMarketEntryIdentity,
+): T | null {
+  const url = typeof identity.url === 'string' ? identity.url.trim() : ''
+  if (url !== '') {
+    const byUrl = entries.find(item => item.url === url)
+    if (byUrl) return byUrl
+  }
+  const name = typeof identity.name === 'string' ? identity.name.trim() : ''
+  if (name === '') return null
+  const byName = entries.filter(item => item.name === name)
+  if (byName.length === 1) return byName[0]
+  const byNpm = entries.filter(item => item.npm === name)
+  if (byName.length === 0) {
+    if (byNpm.length === 1) return byNpm[0]
+    if (byNpm.length === 0) return null
+  }
+  const candidates = byName.length > 0 ? byName : byNpm
+  const where = candidates.map(item => item.url).slice(0, 4).join('、')
+  throw new Error(
+    `dsh-market 精选目录里有 ${candidates.length} 个条目都叫「${name}」（${where}），无法判断你点的是哪一个。`
+    + '请回到市场页重新点那张卡片——卡片会把条目自己的仓库地址一起带上。',
+  )
+}
+
 export function compareDshMarketVersions(left: string | null, right: string | null): number | null {
   if (!left || !right) return null
   const parse = (value: string) => {
@@ -521,7 +561,7 @@ export function createDshMarketService(options: DshMarketOptions) {
     } catch { /* profile 写入失败不阻断安装 */ }
   }
 
-  async function mutate(name: string, action: 'install' | 'update' | 'uninstall', profileOverride?: string, exactVersion?: string | null): Promise<DshMarketInstalledPlugin[]> {
+  async function mutate(name: string, action: 'install' | 'update' | 'uninstall', profileOverride?: string, exactVersion?: string | null, url?: string | null): Promise<DshMarketInstalledPlugin[]> {
     if (active) throw new Error('dsh-market 正在执行另一个插件操作，请等待完成。')
     active = true
     try {
@@ -534,7 +574,8 @@ export function createDshMarketService(options: DshMarketOptions) {
         return []
       }
       const registry = await loadRegistry()
-      const entry = registry.plugins!.find(item => item.name === name || item.npm === name)
+      // 名字在目录里不唯一：同名条目会被 find 按顺序误命中，必须把卡片自己的 url 一起带上。
+      const entry = findDshMarketRegistryEntry(registry.plugins!, { name, url })
       if (!entry) throw new Error('插件不在 dsh-market 精选目录中。')
       let target = dshMarketInstallTarget(entry, action === 'install' ? exactVersion : null)
       if (!target) throw new Error('dsh-market 不支持此插件的来源地址。')
@@ -659,13 +700,14 @@ export function createDshMarketService(options: DshMarketOptions) {
       // Remote npm/GitHub update checks require the explicit check-updates action.
       return applyUpdateStatuses(catalog, updatesCache?.data ?? {})
     },
-    install: (name: string, profileName?: string, exactVersion?: string | null) => mutate(name, 'install', profileName, exactVersion),
-    update: (name: string, profileName?: string) => mutate(name, 'update', profileName),
-    uninstall: (name: string, profileName?: string) => mutate(name, 'uninstall', profileName),
-    toggle: async (name: string, enabled: boolean) => {
+    install: (name: string, profileName?: string, exactVersion?: string | null, url?: string | null) =>
+      mutate(name, 'install', profileName, exactVersion, url),
+    update: (name: string, profileName?: string, url?: string | null) => mutate(name, 'update', profileName, null, url),
+    uninstall: (name: string, profileName?: string, url?: string | null) => mutate(name, 'uninstall', profileName, null, url),
+    toggle: async (name: string, enabled: boolean, url?: string | null) => {
       const settings = await options.readSettings()
       const installed = await readInstalled(settings)
-      const entry = (await loadRegistry()).plugins!.find(item => item.name === name || item.npm === name)
+      const entry = findDshMarketRegistryEntry((await loadRegistry()).plugins!, { name, url })
       if (!entry) throw new Error('插件不在 dsh-market 精选目录中。')
       const alias = findDshMarketInstalledAlias(entry, installed.map, npmAliasByName.get(entry.name))
       if (!alias) throw new Error('插件尚未安装。')

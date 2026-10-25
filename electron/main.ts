@@ -842,8 +842,8 @@ function createServices(): Services {
         return result
       },
       'dsh-market': job => job.action === 'update'
-        ? dshMarket.update(job.name, job.profileName)
-        : dshMarket.install(job.name, job.profileName, job.exactVersion),
+        ? dshMarket.update(job.name, job.profileName, job.url)
+        : dshMarket.install(job.name, job.profileName, job.exactVersion, job.url),
       'skill-market-install': job => installer.installSkillFromMarket(job),
       'skill-market-install-by-name': async job => {
         // skills.sh 索引条目不知道默认分支：main/master 逐个尝试归档分析，命中 target 即停（原版队列接管安装）。

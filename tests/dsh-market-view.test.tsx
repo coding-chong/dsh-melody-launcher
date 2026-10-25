@@ -175,7 +175,7 @@ describe('DshMarketView bounded rendering', () => {
       await render(true)
       expect(document.querySelectorAll('.dsh-market-card')).toHaveLength(2)
       await act(async () => document.querySelectorAll<HTMLButtonElement>('.dsh-market-card .primary-command')[1].click())
-      expect(installDshMarketPlugin).toHaveBeenCalledWith('second-package')
+      expect(installDshMarketPlugin).toHaveBeenCalledWith('second-package', undefined, undefined, 'https://github.com/demo/second')
       expect(errors.mock.calls.some(args => args.some(arg => String(arg).includes('same key')))).toBe(false)
     } finally { errors.mockRestore() }
   })
