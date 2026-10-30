@@ -205,9 +205,9 @@ export async function listAvailableDshVersions(fetchImpl: typeof fetch = fetch):
   const candidates = versions
     .map(version => candidateFromVersion(version, typeof data.time?.[version] === 'string' ? data.time[version] as string : null, tagged.get(normalizeDshVersion(version))))
     .sort((left, right) => compareVersions(left.version, right.version))
-  const stable = candidates.filter(candidate => !candidate.prerelease).slice(0, VERSION_LIMIT_PER_CHANNEL)
-  const prerelease = candidates.filter(candidate => candidate.prerelease).slice(0, VERSION_LIMIT_PER_CHANNEL)
-  const current = candidates.filter(candidate => ['latest', 'next', 'beta', 'rc'].includes(candidate.label ?? ''))
+  const stable = candidates.filter(candidate => !candidate.prerelease).slice(-VERSION_LIMIT_PER_CHANNEL)
+  const prerelease = candidates.filter(candidate => candidate.prerelease).slice(-VERSION_LIMIT_PER_CHANNEL)
+  const current = candidates.filter(candidate => ['latest', 'next', 'beta', 'rc', 'alpha'].includes(candidate.label ?? ''))
   const selected = new Map<string, RuntimeVersionCandidate>()
   for (const item of [...stable, ...prerelease, ...current]) selected.set(item.version, item)
   return [...selected.values()].sort((left, right) => compareVersions(left.version, right.version))
