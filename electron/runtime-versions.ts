@@ -38,6 +38,15 @@ import {
 
 const DSH_REGISTRY_URL = 'https://registry.npmjs.org/@deepseek-ai%2fdsh'
 const VERSION_LIMIT_PER_CHANNEL = 12
+/**
+ * 依赖下载默认仍走官方 registry；国内网络下单次 tarball 请求经常超过 30 秒，
+ * 可以用 DSH_NPM_REGISTRY 指向镜像（例如 https://registry.npmmirror.com）。
+ */
+const DSH_DEPENDENCY_REGISTRY = process.env.DSH_NPM_REGISTRY?.trim() || ''
+
+function dependencyRegistryArgs(): string[] {
+  return DSH_DEPENDENCY_REGISTRY ? ['--registry', DSH_DEPENDENCY_REGISTRY] : []
+}
 
 /**
  * DSH 是一棵很大的依赖树。安装时显式固定网络行为和锁文件行为，
@@ -56,11 +65,12 @@ export function buildManagedDshInstallArgs(root: string, version: string): strin
     '--loglevel=verbose',
     '--ignore-scripts',
     '--prefer-offline',
-    '--fetch-timeout=30000',
-    '--fetch-retries=1',
+    '--fetch-timeout=180000',
+    '--fetch-retries=5',
     '--fetch-retry-factor=2',
-    '--fetch-retry-mintimeout=1000',
-    '--fetch-retry-maxtimeout=10000',
+    '--fetch-retry-mintimeout=2000',
+    '--fetch-retry-maxtimeout=60000',
+    ...dependencyRegistryArgs(),
     `${DSH_PACKAGE_NAME}@${normalizeDshVersion(version)}`,
   ]
 }
@@ -73,8 +83,12 @@ export function buildManagedDshPnpmArgs(root: string, version: string): string[]
     '--lockfile=true',
     '--ignore-scripts',
     '--reporter=append-only',
-    '--fetch-timeout=30000',
-    '--fetch-retries=1',
+    '--network-concurrency=8',
+    '--fetch-timeout=180000',
+    '--fetch-retries=5',
+    '--fetch-retry-mintimeout=2000',
+    '--fetch-retry-maxtimeout=120000',
+    ...dependencyRegistryArgs(),
     `${DSH_PACKAGE_NAME}@${normalizeDshVersion(version)}`,
   ]
 }
