@@ -15,3 +15,6 @@ dist-final/
 
 # 大型本地验收样本（真实整合包 1.3GB），不进版本库；tests/_probe_real_scan.test.ts 按其存在与否自动跳过。
 /整合包(1).zip
+
+# Windows 构建时某个依赖把未展开的 %SystemDrive% 当成相对路径，落成图标缓存副本。
+%SystemDrive%/
