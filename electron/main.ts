@@ -11,6 +11,7 @@ import { createApplicationAddonManager, type ApplicationAddonManager } from './a
 import { applyWindowMode, applyWindowModeImmediate, createMainWindow, createRendererChannel } from './app-window'
 import { createCatalogSyncService, type CatalogSyncService } from './catalog-sync'
 import { createCopilotSessionManager, type CopilotSessionManager } from './copilot-sessions'
+import { copyPluginBody } from './plugin-body-copy'
 import { createDshMarketService, type DshMarketService } from './dsh-market'
 import { runCommand } from './command'
 import { readDeepSeekApiKey } from './credentials'
@@ -302,6 +303,45 @@ function createServices(): Services {
           if (sourceSpecs.has(packageName)) continue
           const candidate = siblingManifest.dependencies?.[packageName]
           if (typeof candidate !== 'string' || candidate.trim() === '' || candidate.trim() === '*') continue
+          // 兄弟 Profile 磁盘上已经装好的实体是最可靠的来源：离线环境里
+          // registry metadata 和 git 都可能不可达，只有实体一定能复用。
+          const installedDirectory = path.join(profileRoot, sibling.name, 'node_modules', ...packageName.split('/'))
+          let installedVersion = ''
+          try {
+            const installedManifest = JSON.parse(await readFile(path.join(installedDirectory, 'package.json'), 'utf8')) as { version?: unknown }
+            if (typeof installedManifest.version === 'string' && installedManifest.version.trim().length > 0) installedVersion = installedManifest.version.trim()
+          } catch {
+            installedVersion = ''
+          }
+          if (installedVersion.length > 0) {
+            if (/^(?:github:|git\+|https?:)/.test(candidate.trim())) {
+              // github:/git+/https 来源在断网时必然失败（git ls-remote 连不上）。
+              // 兄弟那份实体已经在磁盘上，搬进共享插件池并改成 file: 引用。
+              const safeVersion = installedVersion.replace(/[^0-9A-Za-z._+-]/g, '_')
+              const sharedSource = path.join(current.dshHome, '.dsh-launcher-plugin-bodies', ...packageName.split('/'), safeVersion)
+              if (path.resolve(installedDirectory) !== path.resolve(sharedSource)) {
+                await mkdir(path.dirname(sharedSource), { recursive: true })
+                try {
+                  await readFile(path.join(sharedSource, 'package.json'), 'utf8')
+                } catch {
+                  // 只跳过源树内部的 node_modules。源路径本身就在
+                  // `profiles/<name>/node_modules/` 下，拿绝对路径去判断会把
+                  // 复制根目录一起拒掉，结果是什么都没复制的空目录引用。
+                  await copyPluginBody(installedDirectory, sharedSource)
+                }
+              }
+              sourceSpecs.set(packageName, `file:${sharedSource}`)
+              continue
+            }
+            if (!candidate.startsWith('file:')) {
+              // registry 来源：锁定成兄弟实际安装的精确版本。范围 spec 会让
+              // pnpm 解析到 store 里没有的新版本，--offline 就会整单失败。
+              sourceSpecs.set(packageName, installedVersion)
+              continue
+            }
+            // file: 来源继续走下面的原有分支：引用用户的源目录，跟随源码更新。
+            // 把它快照进共享池会让「改源码重新构建」不再生效。
+          }
           if (candidate.startsWith('file:')) {
             const rawPath = candidate.slice('file:'.length)
             const sourcePath = path.isAbsolute(rawPath) ? rawPath : path.resolve(path.dirname(siblingManifestPath), rawPath)
@@ -338,7 +378,13 @@ function createServices(): Services {
           for (const packageName of missing) {
             const currentSpec = dependencies[packageName]
             const sourceSpec = sourceSpecs.get(packageName)
-            if (!sourceSpec || (currentSpec && currentSpec !== '*' && !/[<>=*^~]/.test(currentSpec))) continue
+            // 范围 spec、`*` 和远端来源（github:/git+/https）都可以被本地来源替换；
+            // 只有用户写死的精确版本才保持原样。
+            const replaceable = currentSpec === undefined
+              || currentSpec === '*'
+              || /[<>=*^~]/.test(currentSpec)
+              || /^(?:github:|git\+|https?:)/.test(currentSpec)
+            if (!sourceSpec || !replaceable) continue
             dependencies[packageName] = sourceSpec
             repaired.push(`${packageName} → ${sourceSpec}`)
           }
@@ -577,13 +623,18 @@ function createServices(): Services {
    * 真实 installer 的 installPluginTarget 只接受 GitHub 仓库分析，无法直接
    * 安装本地目录，因此这里在组装层用 DSH CLI 插件命令补上最小通路。
    */
-  async function installPackLocalDirectory(target: PackInstallTarget): Promise<void> {
-    const localDirectory = validateLocalPluginDirectory(target.localDirectory)
+  /**
+   * 一次 `dsh plugin add` 命令，可传多个 `file:` specifier。整包导入时把所有
+   * 离线本体并成一条，依赖树只解析一遍（串行单发会把同一棵树解析 N 遍，越到
+   * 后面越慢）。
+   */
+  async function runLocalPluginAdd(directories: string[], profileName?: string): Promise<{ exitCode: number; diagnostics: string }> {
     const current = await settings.read()
     const nodeRuntime = await prepareNodeRuntime('plugin')
     const pnpmRuntime = await preparePnpmRuntime('plugin', nodeRuntime)
     const executable = resolveNodeExecutable(current.launchExecutable, nodeRuntime)
-    const commandArgs = buildPluginCommandArgs(current, executable, ['add', `file:${localDirectory}`], target.profileName)
+    const specs = directories.map(directory => `file:${directory}`)
+    const commandArgs = buildPluginCommandArgs(current, executable, ['add', ...specs], profileName)
     const result = await runCommand(executable, commandArgs, {
       cwd: current.workspace,
         env: withGitOnPath(withExecutableDirectoryOnPath(
@@ -606,7 +657,11 @@ function createServices(): Services {
       inactivityTimeoutMs: 5 * 60 * 1000,
       onOutput: (text, level) => events.output('plugin', level, text),
     })
-    if (result.exitCode !== 0) throw new Error(`插件安装失败（代码 ${result.exitCode}），请查看运行日志。`)
+    return { exitCode: result.exitCode, diagnostics: result.output.slice(-4_000).trim() }
+  }
+
+  /** 回执里的版本从本体 package.json 读；读不到记 null（允许）。 */
+  async function recordPackLocalInstall(target: PackInstallTarget, localDirectory: string): Promise<void> {
     let version: string | null = null
     try {
       const packageManifest = JSON.parse(await readFile(path.join(localDirectory, 'package.json'), 'utf8')) as { version?: unknown }
@@ -624,10 +679,60 @@ function createServices(): Services {
       commit: '',
       installedAt: new Date().toISOString(),
     })
-    await consolidatePluginPool(current.dshHome)
+  }
+
+  async function installPackLocalDirectory(target: PackInstallTarget): Promise<void> {
+    const localDirectory = validateLocalPluginDirectory(target.localDirectory)
+    const { exitCode, diagnostics } = await runLocalPluginAdd([localDirectory], target.profileName)
+    if (exitCode !== 0) throw new Error(`插件安装失败（代码 ${exitCode}）。${diagnostics || '请查看运行日志。'}`)
+    await recordPackLocalInstall(target, localDirectory)
+    await consolidatePluginPool((await settings.read()).dshHome)
+  }
+
+  /**
+   * 整包导入的离线本体批量安装。一次 pnpm add 把整批 `file:` 装进去，依赖树只
+   * 解析一遍；批量失败时回退逐个重装，只为拿到「哪一个坏了」——单个失败不会
+   * 被整批拖下水。
+   */
+  async function installPackLocalDirectories(targets: PackInstallTarget[]): Promise<{ installed: string[]; failures: { packageName: string; reason: string }[] }> {
+    const valid = targets.filter(target => target.localDirectory)
+    if (valid.length === 0) return { installed: [], failures: [] }
+    if (valid.length === 1) {
+      const only = valid[0]
+      try {
+        await installPackLocalDirectory(only)
+        return { installed: [only.packageName], failures: [] }
+      } catch (error) {
+        return { installed: [], failures: [{ packageName: only.packageName, reason: error instanceof Error ? error.message : String(error) }] }
+      }
+    }
+    const directories = valid.map(target => validateLocalPluginDirectory(target.localDirectory))
+    const profileName = valid[0].profileName
+    // 一次 pnpm add 只能落到一个 Profile；跨 Profile 的分组由调用方拆开。
+    if (valid.every(target => target.profileName === profileName)) {
+      const { exitCode, diagnostics } = await runLocalPluginAdd(directories, profileName)
+      if (exitCode === 0) {
+        for (const [index, target] of valid.entries()) await recordPackLocalInstall(target, directories[index])
+        await consolidatePluginPool((await settings.read()).dshHome)
+        return { installed: valid.map(target => target.packageName), failures: [] }
+      }
+      events.output('plugin', 'info', `批量安装未完成（代码 ${exitCode}），改为逐个安装以定位失败项。${diagnostics ? `\n${diagnostics}` : ''}`)
+    }
+    const installed: string[] = []
+    const failures: { packageName: string; reason: string }[] = []
+    for (const target of valid) {
+      try {
+        await installPackLocalDirectory(target)
+        installed.push(target.packageName)
+      } catch (error) {
+        failures.push({ packageName: target.packageName, reason: error instanceof Error ? error.message : String(error) })
+      }
+    }
+    return { installed, failures }
   }
 
   const packInstaller: InstallInstaller = {
+    installLocalBatch: targets => installPackLocalDirectories(targets),
     async installPluginTarget(target, profileOverride) {
       if (target.source === 'local-directory') {
         await installPackLocalDirectory(target)
@@ -742,8 +847,8 @@ function createServices(): Services {
         return result
       },
       'dsh-market': job => job.action === 'update'
-        ? dshMarket.update(job.name, job.profileName)
-        : dshMarket.install(job.name, job.profileName, job.exactVersion),
+        ? dshMarket.update(job.name, job.profileName, job.url)
+        : dshMarket.install(job.name, job.profileName, job.exactVersion, job.url),
       'skill-market-install': job => installer.installSkillFromMarket(job),
       'skill-market-install-by-name': async job => {
         // skills.sh 索引条目不知道默认分支：main/master 逐个尝试归档分析，命中 target 即停（原版队列接管安装）。

@@ -695,21 +695,45 @@ export async function prepareProfileDependencies(options: ProfileServiceOptions,
   const locallyAvailable = await locallyAvailableDependencies(dshHome, profileName, initialMissing)
   const repair = typeof fillMissing === 'function'
     ? fillMissing
-    : options.fillMissingDependencies
+    : fillMissing === true && options.fillMissingDependencies
       ? (items: string[]) => options.fillMissingDependencies!(profileName, items)
       : null
-  const repairable = fillMissing ? initialMissing : locallyAvailable
-  if (repairable.length > 0 && repair) {
-    try {
-      await repair(repairable)
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error)
-      throw new Error(`Profile「${profileName}」依赖准备失败：${detail}`, { cause: error })
+  const missingNow = async (): Promise<string[]> => profile.initialized
+    ? missingDependencies(await readProfile(dshHome, profileName, options.pluginReceiptsPath))
+    : []
+  if (repair) {
+    // 显式补齐（用户已在界面上确认，或 prepare() 的预检）：只给一次机会。
+    // 失败必须把底层原因抛出去，不能压成「缺少插件」——用户需要看到是
+    // pnpm/git 挂了，而不是又一次「确认补齐」。
+    if (initialMissing.length > 0) {
+      try {
+        await repair(initialMissing)
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error)
+        throw new Error(`Profile「${profileName}」依赖准备失败：${detail}`, { cause: error })
+      }
     }
+    // 补齐之后必须重新验证链接：安装器报告成功不代表 node_modules 真的可用。
+    const afterRepair = await missingNow()
+    if (afterRepair.length > 0) throw new Error(`Profile「${profileName}」仍缺少插件：${afterRepair.join('、')}`)
+    return
   }
-  const missing = profile.initialized ? await missingDependencies(await readProfile(dshHome, profileName, options.pluginReceiptsPath)) : []
+  // 没有显式请求时只用本地来源静默物化：兄弟 Profile 或共享 body 池里已经有
+  // 的包直接补链接，不联网、也不改依赖声明，所以不需要再确认一次。
+  let autoRepairError = ''
+  if (locallyAvailable.length > 0 && options.fillMissingDependencies) {
+    // 静默吞掉这里的失败，用户最终只会看到「缺少插件」，完全不知道是
+    // pnpm/git 挂了。记住原因，附到最终错误里。
+    await options.fillMissingDependencies(profileName, locallyAvailable).catch(error => {
+      autoRepairError = error instanceof Error ? error.message : String(error)
+    })
+  }
+  const missing = await missingNow()
   if (missing.length > 0) {
-    throw new Error(`Profile「${profileName}」缺少插件：${missing.join('、')}。${repair && repairable.length > 0 ? '补齐后仍未生成可用依赖，请检查安装日志。' : '确认补齐依赖后再切换。'}`)
+    const reason = autoRepairError.length > 0
+      ? `自动补齐失败：${autoRepairError}`
+      : '确认补齐依赖后再切换。'
+    throw new Error(`Profile「${profileName}」缺少插件：${missing.join('、')}。${reason}`)
   }
 }
 
@@ -726,9 +750,15 @@ export async function switchProfile(options: ProfileServiceOptions, profileName:
 }
 
 export async function deleteProfile(options: ProfileServiceOptions, profileName: string): Promise<void> {
-  if (options.isRuntimeRunning?.()) throw new Error('请先停止 DSH，再删除 Profile。')
   const current = await options.readSettings()
-  if (current.profileName === profileName) throw new Error('当前 Profile 不能删除。')
+  // 只有「正在被运行中的 DSH 加载的那一个 Profile」需要先停止 DSH。删除别的
+  // Profile 与运行中的进程无关：它只加载 settings.profileName 的 node_modules，
+  // 拿整台启动器当借口拒绝删除别的环境，等于禁止用户清理没在用的目录。
+  if (current.profileName === profileName) {
+    throw new Error(options.isRuntimeRunning?.()
+      ? '请先停止 DSH，再删除当前 Profile。'
+      : '当前 Profile 不能删除。')
+  }
   const dshHome = await homeOf(options)
   const directory = profileDirFor(dshHome, profileName)
   const manifest = await readProfileDependencyManifest(directory)
@@ -740,7 +770,16 @@ export async function deleteProfile(options: ProfileServiceOptions, profileName:
       }
     }
   }
-  await rm(directory, { recursive: true, force: true })
+  try {
+    await rm(directory, { recursive: true, force: true })
+  } catch (error) {
+    // 运行中的 DSH 可能仍以硬链接/句柄引用这个目录里的文件，Windows 会抛 EBUSY/EPERM。
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'EBUSY' || code === 'EPERM' || code === 'ENOTEMPTY') {
+      throw new Error(`Profile「${profileName}」仍有文件被运行中的 DSH 占用，请停止 DSH 后重试。`)
+    }
+    throw error
+  }
   // Receipts are profile-scoped source metadata. Removing them prevents a
   // later export from accidentally attributing another Profile's repository
   // to this one. The physical pnpm store is deliberately untouched.

@@ -22,7 +22,8 @@ interface PackageManifest {
   engines?: { node?: string }
   dsh?: {
     type?: string
-    bundle?: { patch?: string }
+    // 第三方 package.json 可能声明有序路径数组，运行时必须按两种形态兜底。
+    bundle?: { patch?: string | string[] }
     client?: { platform?: string }
   }
 }
@@ -482,11 +483,15 @@ export async function analyzeRepository(
   for (const { packagePath, manifest } of manifests) {
     if (!manifest?.name || !isSafePackageName(manifest.name)) continue
     if (isTemplatePackageName(manifest.name)) continue
-    const patchFile = manifest.dsh?.bundle?.patch
-    if (!patchFile) continue
+    const declaredPatch = manifest.dsh?.bundle?.patch
     const directory = path.posix.dirname(packagePath) === '.' ? '' : path.posix.dirname(packagePath)
-    const patchPath = candidatePatchPath(directory, patchFile)
-    if (!patchPath || !files.has(patchPath)) continue
+    // 单个路径与有序路径数组都是合法声明；任一补丁文件存在于仓库即视为可安装 Bundle。
+    const patchFiles = (typeof declaredPatch === 'string' ? [declaredPatch] : Array.isArray(declaredPatch) ? declaredPatch : [])
+      .filter((file): file is string => typeof file === 'string' && file.trim() !== '')
+    const patchPath = patchFiles
+      .map(file => candidatePatchPath(directory, file.trim()))
+      .find(candidate => candidate !== null && files.has(candidate))
+    if (!patchPath) continue
 
     const published = manifest.private ? null : await publishedPackage(manifest.name, repository, fetchImpl)
     const source: PluginInstallSource = published

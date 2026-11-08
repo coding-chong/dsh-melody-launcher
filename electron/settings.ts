@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { parse } from 'yaml'
 import { DEFAULT_PROFILE_NAME, DSH_PACKAGE_NAME } from '../src/constants'
@@ -284,9 +284,29 @@ export interface SettingsStoreOptions {
 
 export function createSettingsStore(options: SettingsStoreOptions): SettingsStore {
   let cache: AppSettings | null = null
+  let cacheStamp: string | null = null
   // 首屏会并发请求 settings/profile/runtime 等多个 IPC。合并首次读取，
   // 避免每个调用都重复扫描本地 DSH 和 PATH。
   let pendingRead: Promise<AppSettings> | null = null
+
+  /**
+   * settings.json 的变更标记。缓存必须能被外部改写打破：另一个启动器实例、
+   * 旧版本启动器、或者用户手工编辑，都会让内存里的 profileName 变成过期值，
+   * 之后所有按 Profile 定位的读取（例如自定义模型服务的 cordis.patch.yml）
+   * 都会落到错误的目录上。
+   */
+  async function fileStamp(): Promise<string | null> {
+    try {
+      const info = await stat(options.filePath)
+      return `${info.mtimeMs}:${info.size}`
+    } catch (error) {
+      // 只有「文件还不存在」算正常的无标记状态。占用 / 无权限 / 超时之类的
+      // 探测失败不能当成「文件变了」：那会触发一次注定失败的读取，把一次失败
+      // 伪装成权威设置。交给调用方按错误处理。
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+      throw error
+    }
+  }
 
   async function profileDshVersion(settings: AppSettings): Promise<string | null | undefined> {
     if (!isSafeProfileName(settings.profileName) || typeof settings.dshHome !== 'string' || !path.isAbsolute(settings.dshHome)) return undefined
@@ -330,34 +350,57 @@ export function createSettingsStore(options: SettingsStoreOptions): SettingsStor
     return projected
   }
 
+  async function loadFromDisk(): Promise<AppSettings> {
+    const defaults = options.createDefaults()
+    let raw: string | null = null
+    try {
+      raw = await readFile(options.filePath, 'utf8')
+    } catch (error) {
+      // 文件不存在 = 还没有设置，可以回落到默认值。其余读取失败（被占用、
+      // 无权限、超时）必须抛出去：把一次失败的读取当成权威空设置，下一次保存
+      // 就会用默认值覆盖掉磁盘上原本完好的配置。
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      raw = null
+    }
+    let stored: Partial<AppSettings> | null = null
+    if (raw !== null) {
+      try {
+        stored = JSON.parse(raw) as Partial<AppSettings>
+      } catch {
+        // 内容不是合法 JSON：按「没有可用设置」处理，落盘修复会覆盖它。
+        stored = null
+      }
+    }
+    let loaded = mergeStoredSettings(defaults, stored)
+    const profileVersion = await profileDshVersion(loaded)
+    if (profileVersion !== undefined) loaded = { ...loaded, dshVersion: profileVersion }
+    cache = normalizeRuntimeSettings(await projectRuntime(loaded, true), defaults)
+    // Persist the repair so a subsequent process cannot reintroduce the
+    // malformed path values. Keep this best-effort: a read must still work
+    // when the settings directory is temporarily read-only.
+    if (stored && hasMalformedStoredSettings(stored)) {
+      await mkdir(path.dirname(options.filePath), { recursive: true }).catch(() => undefined)
+      await writeFile(options.filePath, `${JSON.stringify(cache, null, 2)}\n`, 'utf8').catch(() => undefined)
+    }
+    return cache
+  }
+
   async function read(): Promise<AppSettings> {
-    if (cache) {
+    // 并发首读合并：首屏会同时请求 settings/profile/runtime 等多个 IPC，
+    // 只需要真正扫描一次本地 DSH 与 PATH。
+    if (pendingRead) return pendingRead
+    // 磁盘上的设置被外部改写后，缓存整体失效：只刷新 dshVersion 会留下过期的
+    // profileName / dshHome，正是「切了 Profile 但读取还停在旧 Profile」的来源。
+    if (cache && await fileStamp() === cacheStamp) {
       const profileVersion = await profileDshVersion(cache)
       const refreshed = await projectRuntime(profileVersion === undefined ? cache : { ...cache, dshVersion: profileVersion })
       cache = normalizeRuntimeSettings(refreshed, options.createDefaults())
       return cache
     }
-    if (pendingRead) return pendingRead
     const load = (async (): Promise<AppSettings> => {
-      const defaults = options.createDefaults()
-      let stored: Partial<AppSettings> | null = null
-      try {
-        stored = JSON.parse(await readFile(options.filePath, 'utf8')) as Partial<AppSettings>
-      } catch {
-        stored = null
-      }
-      let loaded = mergeStoredSettings(defaults, stored)
-      const profileVersion = await profileDshVersion(loaded)
-      if (profileVersion !== undefined) loaded = { ...loaded, dshVersion: profileVersion }
-      cache = normalizeRuntimeSettings(await projectRuntime(loaded, true), defaults)
-      // Persist the repair so a subsequent process cannot reintroduce the
-      // malformed path values. Keep this best-effort: a read must still work
-      // when the settings directory is temporarily read-only.
-      if (stored && hasMalformedStoredSettings(stored)) {
-        await mkdir(path.dirname(options.filePath), { recursive: true }).catch(() => undefined)
-        await writeFile(options.filePath, `${JSON.stringify(cache, null, 2)}\n`, 'utf8').catch(() => undefined)
-      }
-      return cache
+      const loaded = await loadFromDisk()
+      cacheStamp = await fileStamp()
+      return loaded
     })()
     pendingRead = load
     try {
@@ -371,6 +414,9 @@ export function createSettingsStore(options: SettingsStoreOptions): SettingsStor
     read,
     async save(input: AppSettings): Promise<AppSettings> {
       let next = validateSettings(input)
+      // 这里刻意使用交付给渲染层的缓存快照，而不是重新读取：渲染层提交的是它看到
+      // 的那一份 dshVersion，重新读取会把「未改动」误判成「显式改动」，从而覆盖掉
+      // Profile 元数据里更新的版本。外部改写只在 read() 里失效。
       const current = cache ?? await read()
       const profileChanged = current.profileName !== next.profileName || !samePath(current.dshHome, next.dshHome)
       if (profileChanged) {
@@ -391,6 +437,7 @@ export function createSettingsStore(options: SettingsStoreOptions): SettingsStor
       await mkdir(path.dirname(options.filePath), { recursive: true })
       await writeFile(options.filePath, `${JSON.stringify(next, null, 2)}\n`, 'utf8')
       cache = next
+      cacheStamp = await fileStamp()
       return next
     },
   }

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildInstallResult,
   guardPackStart,
+  planLocalBatch,
   runSerialInstall,
   type InstallableItem,
 } from '../electron/pack-orchestration'
@@ -167,5 +168,42 @@ describe('guardPackStart 互斥守卫', () => {
       isInstallerBusy: () => true,
       isPackBusy: () => true,
     })).toBe('安装器忙')
+  })
+})
+
+describe('planLocalBatch', () => {
+  it('把同一 Profile 的离线本体并成一组', () => {
+    const batches = planLocalBatch([
+      { packageName: 'a', profileName: 'pack-web' },
+      { packageName: 'b', profileName: 'pack-web' },
+      { packageName: 'c', profileName: 'pack-web' },
+    ])
+    expect(batches).toHaveLength(1)
+    expect(batches[0].map(target => target.packageName)).toEqual(['a', 'b', 'c'])
+  })
+
+  it('跨 Profile 不合并，单成员组也不会返回', () => {
+    const batches = planLocalBatch([
+      { packageName: 'a', profileName: 'pack-web' },
+      { packageName: 'b', profileName: 'tui' },
+      { packageName: 'c', profileName: 'tui' },
+    ])
+    // 'a' 是单成员组：批量没有收益，交回调用方单发。
+    expect(batches).toHaveLength(1)
+    expect(batches[0].map(target => target.packageName)).toEqual(['b', 'c'])
+  })
+
+  it('缺 profileName 的候选落在同一组', () => {
+    const batches = planLocalBatch([
+      { packageName: 'a' },
+      { packageName: 'b' },
+    ])
+    expect(batches).toHaveLength(1)
+    expect(batches[0].map(target => target.packageName)).toEqual(['a', 'b'])
+  })
+
+  it('全部是单成员时返回空，调用方走单发路径', () => {
+    expect(planLocalBatch([{ packageName: 'a', profileName: 'pack-web' }])).toEqual([])
+    expect(planLocalBatch([])).toEqual([])
   })
 })

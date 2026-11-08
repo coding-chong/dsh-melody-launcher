@@ -108,10 +108,16 @@ export const DshMarketView = memo(function DshMarketView({ active = true, profil
     setBusy(marketPluginKey(plugin))
     setError(null)
     try {
-      if (action === 'install') await api.installDshMarketPlugin(plugin.npm ?? plugin.name)
-      else if (action === 'update') await api.updateDshMarketPlugin(plugin.npm ?? plugin.name)
-      else if (action === 'uninstall') await api.uninstallPlugin(plugin.npm ?? plugin.name, { purgeStore: true })
-      else await api.toggleDshMarketPlugin(plugin.npm ?? plugin.name, enabled === true)
+      // 卡片身份必须是这个条目自己的仓库地址：目录里同名条目很多（dsh-pet 就有 4 个），
+      // 只送 npm 名会让主进程命中最靠前的那一条，于是「点 A 卡片装上了 B 仓库」。
+      const marketName = plugin.npm ?? plugin.name
+      if (action === 'install') await api.installDshMarketPlugin(marketName, undefined, undefined, plugin.url)
+      else if (action === 'update') await api.updateDshMarketPlugin(marketName, undefined, plugin.url)
+      // 市场页刻意不弹作用域选择：这里的语义就是「从市场视角彻底清掉」，一键到底。
+      // 想保留插件本体、只从当前 Profile 摘掉，请去「插件」页用那一行的 🗑——
+      // 那里会问你作用域。不要为了「统一」把这两处合成一个确认框。
+      else if (action === 'uninstall') await api.uninstallPlugin(marketName, { purgeStore: true })
+      else await api.toggleDshMarketPlugin(marketName, enabled === true, plugin.url)
       // The market service and startup-item manager share the same Profile on
       // disk, but their renderer state is otherwise independent. Refresh the
       // shared Profile before redrawing the market so both switches agree.

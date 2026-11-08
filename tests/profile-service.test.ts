@@ -73,6 +73,24 @@ describe('Profile service', () => {
     expect((await listProfiles(env.options)).some(item => item.id === 'beta')).toBe(false)
   })
 
+  it('only demands stopping DSH when the Profile being deleted is the running one', async () => {
+    const env = await fixture()
+    await createProfile(env.options, { name: 'alpha' })
+    await createProfile(env.options, { name: 'beta' })
+    const runningOptions = { ...env.options, isRuntimeRunning: () => true }
+
+    // 当前运行的 Profile 是 web；删 alpha/beta 与那个进程无关，不该被拦。
+    await expect(deleteProfile(runningOptions, 'alpha')).resolves.toBeUndefined()
+    expect((await listProfiles(env.options)).some(item => item.id === 'alpha')).toBe(false)
+    await expect(deleteProfile(runningOptions, 'beta')).resolves.toBeUndefined()
+
+    // 运行中删「当前」Profile 仍被拦，且提示要停 DSH 而不是含糊的「不能删除」。
+    await expect(deleteProfile(runningOptions, 'web')).rejects.toThrow('请先停止 DSH，再删除当前 Profile。')
+    // 未运行时不涉及 DSH，只是不允许删当前 Profile。
+    await expect(deleteProfile(env.options, 'web')).rejects.toThrow('当前 Profile 不能删除。')
+    await expect(access(path.join(env.dshHome, 'profiles', 'web'))).resolves.toBeUndefined()
+  })
+
   it('migrates legacy pack records to profile metadata and backs up registry files', async () => {
     const env = await fixture()
     env.options = { ...env.options, dshHome: env.dshHome }

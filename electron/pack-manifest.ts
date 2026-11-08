@@ -295,9 +295,14 @@ export function parsePackManifest(text: string, options: { requireDshVersion?: b
   if (typeof raw.name !== 'string' || !PACK_NAME_RE.test(raw.name)) {
     throw new Error('整合包 name 缺失或非法（须以字母/数字开头，1-64 位，仅含字母、数字、._ 与空格）。')
   }
-  if (typeof raw.description !== 'string' || raw.description.trim().length === 0 || raw.description.length > PACK_DESCRIPTION_MAX) {
-    throw new Error(`整合包 description 缺失、为空或超过 ${PACK_DESCRIPTION_MAX} 字符。`)
+  // description 允许为空：导出侧会把没有描述的 Profile 留成 ""，如果导入这边
+  // 强制非空，自产的包就会被自己的校验挡住，形成「导出成功、导入失败」的死循环。
+  // 上限仍然强制；缺失时用 name 现拼一个，保证老包也能导回来。
+  const rawDescription = typeof raw.description === 'string' ? raw.description.trim() : ''
+  if (rawDescription.length > PACK_DESCRIPTION_MAX) {
+    throw new Error(`整合包 description 超过 ${PACK_DESCRIPTION_MAX} 字符。`)
   }
+  const description = rawDescription || `DSH 整合包：${raw.name}`
   if (typeof raw.version !== 'string' || !PACK_VERSION_RE.test(raw.version)) {
     throw new Error('整合包 version 缺失或非法（须为 semver，如 1.0.0）。')
   }
@@ -313,7 +318,7 @@ export function parsePackManifest(text: string, options: { requireDshVersion?: b
 
   const manifest: PackManifest = {
     name: raw.name,
-    description: raw.description,
+    description,
     version: raw.version,
     ...(typeof raw.dshVersion === 'string' ? { dshVersion: normalizePackDshVersion(raw.dshVersion) } : {}),
     plugins: raw.plugins.map((item, index) => parsePackPlugin(item, index)),

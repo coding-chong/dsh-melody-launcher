@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
-import { compareDshMarketVersions, createDshMarketService, dshMarketInstallTarget, findDshMarketInstalledAlias, parseDshMarketSourceUrl } from '../electron/dsh-market'
+import { compareDshMarketVersions, createDshMarketService, dshMarketInstallTarget, findDshMarketInstalledAlias, findDshMarketRegistryEntry, parseDshMarketSourceUrl } from '../electron/dsh-market'
 import type { AppSettings } from '../src/types'
 
 const marketSettings: AppSettings = {
@@ -30,6 +30,21 @@ describe('dsh-market source rules', () => {
     expect(findDshMarketInstalledAlias(entry, { 'dsh-demo': 'github:a/b' })).toBe('dsh-demo')
     expect(findDshMarketInstalledAlias(entry, { 'dsh-demo': 'github:x/y' })).toBeNull()
     expect(findDshMarketInstalledAlias({ ...entry, npm: 'dsh-demo' }, { 'dsh-demo': 'dsh-demo' })).toBe('dsh-demo')
+  })
+
+  it('resolves the clicked card by its own url instead of the first same-named entry', () => {
+    // 精选目录里真的同时存在这两条：#1277 ysyyhhh/dsh-pet 与 #6818 PC2005-cloud/dsh-pet#dsh-pet。
+    const entries = [
+      { name: 'dsh-pet', owner: 'ysyyhhh', url: 'https://github.com/ysyyhhh/dsh-pet', npm: null },
+      { name: 'dsh-pet#dsh-pet', owner: 'PC2005-cloud', url: 'https://github.com/PC2005-cloud/dsh-pet/tree/main/dsh-pet', npm: 'dsh-pet' },
+    ]
+    expect(findDshMarketRegistryEntry(entries, { name: 'dsh-pet', url: 'https://github.com/PC2005-cloud/dsh-pet/tree/main/dsh-pet' })?.owner).toBe('PC2005-cloud')
+    expect(findDshMarketRegistryEntry(entries, { name: 'dsh-pet' })?.owner).toBe('ysyyhhh')
+    // 只给名字又真的撞名（同名条目不止一个）时：报错而不是猜一个。
+    expect(() => findDshMarketRegistryEntry(
+      [...entries, { name: 'dsh-pet', owner: 'zealot00', url: 'https://github.com/zealot00/dsh-pet', npm: null }],
+      { name: 'dsh-pet' },
+    )).toThrow('无法判断你点的是哪一个')
   })
 
   it('only treats a newer npm version as an update', () => {
@@ -230,6 +245,57 @@ describe('dsh-market network & recovery paths', () => {
     expect(findDshMarketInstalledAlias(entry, { '@linxin/dsh-web-ui-all': '0.1.0' }, '@linxin/dsh-web-ui-all')).toBe('@linxin/dsh-web-ui-all')
   })
 
+  it('installs the card that was clicked when the catalog has same-named entries', async () => {
+    const { root, profileDir } = await tempProfile()
+    const manifestPath = path.join(profileDir, 'package.json')
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
+    // 用户此前从另一张卡片装过同名 fork：Profile 里已经有 @ysyyhhh/dsh-pet。
+    manifest.dependencies = { '@ysyyhhh/dsh-pet': 'github:ysyyhhh/dsh-pet' }
+    await writeFile(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8')
+    const calls: string[] = []
+    const service = createDshMarketService({
+      readSettings: async () => ({ ...marketSettings, dshHome: root }),
+      prepareNodeRuntime: node,
+      preparePnpmRuntime: pnpm,
+      fetchImpl: async () => registryResponse([
+        { name: 'dsh-pet', owner: 'ysyyhhh', url: 'https://github.com/ysyyhhh/dsh-pet', category: 'ui', npm: null },
+        { name: 'dsh-pet#dsh-pet', owner: 'PC2005-cloud', url: 'https://github.com/PC2005-cloud/dsh-pet/tree/main/dsh-pet', category: 'fun', npm: 'dsh-pet' },
+      ]),
+      runCommand: async (_executable, args) => {
+        calls.push(args.join(' '))
+        if (!args.includes('add')) return { exitCode: 0, output: 'Done in 1s' }
+        // 模拟 pnpm 把卡片对应的 npm 包装上：写依赖 + 可加载的 bundle 包。
+        const next = JSON.parse(await readFile(manifestPath, 'utf8'))
+        next.dependencies = { ...next.dependencies, 'dsh-pet': '0.3.8' }
+        await writeFile(manifestPath, JSON.stringify(next, null, 2) + '\n', 'utf8')
+        await mkdir(path.join(profileDir, 'node_modules', 'dsh-pet'), { recursive: true })
+        await writeFile(
+          path.join(profileDir, 'node_modules', 'dsh-pet', 'package.json'),
+          JSON.stringify({ name: 'dsh-pet', version: '0.3.8', dsh: { bundle: { patch: './cordis.patch.yml' } } }),
+          'utf8',
+        )
+        // 真实 npm 包会带上自己的 patch 文件：Profile 的 compatible 判定要看它在不在。
+        await writeFile(
+          path.join(profileDir, 'node_modules', 'dsh-pet', 'cordis.patch.yml'),
+          "- insert: []" + '\n',
+          'utf8',
+        )
+        return { exitCode: 0, output: 'done' }
+      },
+      emitProgress: () => undefined,
+      emitOutput: () => undefined,
+    })
+
+    // 不带卡片地址：主进程只能按名字找，先命中的是 ysyyhhh 那条 → 报「插件已安装」。
+    await expect(service.install('dsh-pet')).rejects.toThrow('插件已安装（@ysyyhhh/dsh-pet）')
+
+    // 带上卡片的 url：装的才是卡片对应的 dsh-pet npm 包。
+    await service.install('dsh-pet', undefined, undefined, 'https://github.com/PC2005-cloud/dsh-pet/tree/main/dsh-pet')
+    expect(calls).toEqual(['plugin --profile web add dsh-pet'])
+    const finalManifest = JSON.parse(await readFile(manifestPath, 'utf8'))
+    expect(Object.keys(finalManifest.dependencies)).toEqual(expect.arrayContaining(['dsh-pet', '@ysyyhhh/dsh-pet']))
+    await rm(root, { recursive: true, force: true })
+  })
   it('auto-approves pnpm-11 git build scripts before retrying the add', async () => {
     const { root, profileDir } = await tempProfile()
     let addRuns = 0

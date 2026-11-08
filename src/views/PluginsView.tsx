@@ -254,6 +254,7 @@ export function PluginsView({
                   onDragStart={() => setDragged(plugin.packageName)}
                   onDrop={() => dropAt(plugin.packageName)}
                   onOpenFolder={onOpenPluginFolder ? () => onOpenPluginFolder(plugin.packageName) : undefined}
+                  onUninstall={plugin.builtin ? undefined : () => onUninstall(plugin)}
                 />
                 )
               })}
@@ -523,7 +524,7 @@ function SkillList({ skills, selectedName, busy, locked, onSelect, onToggle }: {
   )
 }
 
-function PluginRow({ plugin, selected, busy, locked, linked, dragging, canMoveUp, canMoveDown, onSelect, onToggle, onMove, onDragStart, onDrop, onOpenFolder }: {
+function PluginRow({ plugin, selected, busy, locked, linked, dragging, canMoveUp, canMoveDown, onSelect, onToggle, onMove, onDragStart, onDrop, onOpenFolder, onUninstall }: {
   plugin: ManagedPlugin
   selected: boolean
   busy: boolean
@@ -538,10 +539,12 @@ function PluginRow({ plugin, selected, busy, locked, linked, dragging, canMoveUp
   onDragStart: () => void
   onDrop: () => void
   onOpenFolder?: () => void
+  /** Built-in composition layers never get this: they come with the runtime. */
+  onUninstall?: () => void
 }) {
   return (
     <div
-      className={`plugin-row ${selected ? 'selected' : ''} ${plugin.enabled ? '' : 'disabled'} ${dragging ? 'dragging' : ''}`}
+      className={`plugin-row ${selected ? 'selected' : ''} ${plugin.enabled ? '' : 'disabled'} ${plugin.declaredInProfile === false ? 'candidate' : ''} ${dragging ? 'dragging' : ''}`}
       draggable={plugin.enabled && !locked && !busy}
       onDragStart={event => {
         if (locked || busy || !plugin.enabled) {
@@ -577,13 +580,14 @@ function PluginRow({ plugin, selected, busy, locked, linked, dragging, canMoveUp
           <span>{busy && <LoaderCircle className="spin" size={11} />}</span>
         </label>
       </div>
-      <div className="plugin-name-cell"><strong>{plugin.displayName}{linked && <span className="linked-component-badge"><Link2 size={10} />协同</span>}</strong><span>{plugin.packageName}</span></div>
+      <div className="plugin-name-cell"><strong>{plugin.displayName}{linked && <span className="linked-component-badge"><Link2 size={10} />协同</span>}{plugin.declaredInProfile === false && <span className="pool-candidate-badge" title="本体在共享插件池里，当前 Profile 没有声明它；打开左侧开关即可安装并启用">池内</span>}</strong><span>{plugin.packageName}</span></div>
       <span className="plugin-description-cell">{plugin.description || '该插件没有提供描述。'}</span>
       <span className="plugin-version">{plugin.version}</span>
       <div className="row-actions" onClick={event => event.stopPropagation()}>
         <button type="button" disabled={locked || busy || !canMoveUp} onClick={() => onMove(-1)} title="向上移动" aria-label={`向上移动 ${plugin.displayName}`}><ArrowUp size={15} /></button>
         <button type="button" disabled={locked || busy || !canMoveDown} onClick={() => onMove(1)} title="向下移动" aria-label={`向下移动 ${plugin.displayName}`}><ArrowDown size={15} /></button>
         {onOpenFolder && <button type="button" disabled={busy} onClick={onOpenFolder} title="打开插件文件夹" aria-label={`打开 ${plugin.displayName} 文件夹`}><FolderOpen size={15} /></button>}
+        {onUninstall && <button type="button" className="row-danger" disabled={locked || busy} onClick={onUninstall} title="卸载插件（从本机所有 Profile 移除并清理缓存）" aria-label={`卸载 ${plugin.displayName}`}><Trash2 size={15} /></button>}
       </div>
     </div>
   )
@@ -611,7 +615,7 @@ function PluginDetails({ plugin, profileName, trial, busy, locked, aiActive, ada
       <dl>
         <div><dt>加载优先级</dt><dd>{plugin.order ? `#${String(plugin.order).padStart(2, '0')}` : '不加载'}</dd></div>
         <div><dt>版本</dt><dd>{plugin.version}</dd></div>
-        <div><dt>来源</dt><dd>{plugin.builtin ? 'DSH 内置' : 'Profile 依赖'}</dd></div>
+        <div><dt>来源</dt><dd>{plugin.builtin ? 'DSH 内置' : plugin.declaredInProfile === false ? '共享池候选（未装到本 Profile）' : 'Profile 依赖'}</dd></div>
         {!plugin.builtin && plugin.actualSource && <div><dt>实际安装来源</dt><dd>{plugin.actualSource === 'market' ? 'DSH Market' : plugin.actualSource === 'npm' ? 'npm' : plugin.actualSource === 'local' ? '整合包本地源码' : 'GitHub'}</dd></div>}
         {plugin.packOrigin && <div><dt>来源整合包</dt><dd>{plugin.packOrigin.packName}</dd></div>}
         <div><dt>兼容性</dt><dd className={plugin.compatible ? 'good' : 'warning'}>{plugin.compatible ? 'Bundle 已识别' : '未检测到 Bundle'}</dd></div>

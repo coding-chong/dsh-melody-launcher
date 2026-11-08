@@ -38,7 +38,7 @@ import type {
   SkillInstallTarget,
 } from '../src/types'
 import { assertMeaningfulPackName, assertPackDshVersion, buildManifestFromReceipts, isValidPackDshVersion, normalizePackDshVersion, packProfileName, parsePackManifest } from './pack-manifest'
-import { extractPackBodiesFromPath, extractPresetBodiesFromPath, findManifestInArchiveFromPath, inspectPackZipFromPath } from './pack-zip'
+import { extractPackBodiesFromPath, extractPresetBodiesFromPath, extractSkillBodiesFromPath, findManifestInArchiveFromPath, inspectPackZipFromPath } from './pack-zip'
 import { describeSnapshotZip, extractSnapshot, SNAPSHOT_FORMAT_VERSION } from './pack-snapshot'
 import { validateFullArchive } from './profile-repository-import'
 import { cleanPackNameHint, extractRawPluginBodiesFromPath, extractRawPresetSourcesFromPath, extractRawSkillSourcesFromPath, scanRawPackZipFromPath, type ExtractByteBudget } from './pack-scan'
@@ -55,8 +55,10 @@ import {
 import {
   buildInstallResult,
   guardPackStart,
+  planLocalBatch,
   runSerialInstall,
   type InstallableItem,
+  type SerialInstallResult,
 } from './pack-orchestration'
 import { readPluginReceipts, removePluginReceipt, type PluginInstallReceipt } from './plugin-receipts'
 import { readPresetReceipts, type PresetInstallReceipt } from './preset-receipts'
@@ -72,6 +74,11 @@ export type PackInstallTarget = PluginInstallTarget & { repository?: string; def
 /** pack 管理器依赖的最小 installer 面（main.ts 组装真实 Installer，测试注入 stub）。 */
 export interface InstallInstaller {
   installPluginTarget(target: PackInstallTarget, profileOverride?: string): Promise<unknown>
+  /**
+   * 批量安装离线本体（整包导入用）：一次装完整批，失败时内部回退逐个定位。
+   * 缺省时 pack 层退回 `installPluginTarget` 单发，行为不变。
+   */
+  installLocalBatch?(targets: PackInstallTarget[]): Promise<{ installed: string[]; failures: { packageName: string; reason: string }[] }>
   installNpmPackage?(request: { packageName: string; version?: string; repository?: string; approvedBuildKeys?: string[]; deniedBuildKeys?: string[] }, profileOverride?: string): Promise<unknown>
   /** raw 整合包导入的技能：从本地源目录/单文件全局安装到 dshHome/skills。 */
   installSkillLocal(dshHome: string, skill: { name: string; format: 'bundle' | 'flat'; sourceDir: string }): Promise<unknown>
@@ -185,6 +192,31 @@ async function resolvePackDshVersion(settings: AppSettings, requested?: string):
 
 function assertSafePackId(packId: string): void {
   if (typeof packId !== 'string' || !isSafeProfileName(packId)) throw new Error('整合包标识无效。')
+}
+
+/**
+ * 本地 Skill 的两种形态：`skills/<name>/`（bundle）或 `skills/<name>.md`（flat），
+ * 停用的 Skill 落在 `skills/.disabled/` 下。返回 null 表示本体不存在。
+ */
+function localSkillFormat(dshHome: string, name: string): 'bundle' | 'flat' | null {
+  const roots = [path.join(dshHome, 'skills'), path.join(dshHome, 'skills', '.disabled')]
+  for (const root of roots) {
+    if (existsSync(path.join(root, name))) return 'bundle'
+    if (existsSync(path.join(root, `${name}.md`))) return 'flat'
+  }
+  return null
+}
+
+/** 导出时定位 Skill 本体路径（目录或单文件），供 zip 打包。 */
+function localSkillSource(dshHome: string, name: string): string | null {
+  const roots = [path.join(dshHome, 'skills'), path.join(dshHome, 'skills', '.disabled')]
+  for (const root of roots) {
+    const directory = path.join(root, name)
+    if (existsSync(directory)) return directory
+    const flatFile = path.join(root, `${name}.md`)
+    if (existsSync(flatFile)) return flatFile
+  }
+  return null
 }
 
 export function createPackManager(options: PackManagerOptions): PackManager {
@@ -437,6 +469,56 @@ export function createPackManager(options: PackManagerOptions): PackManager {
     profileWasNew = false
   }
 
+  /** 离线本体批量预取结果：packageName → 失败原因（null 表示已批量装好）。 */
+  const localBatchOutcome = new Map<string, string | null>()
+
+  /**
+   * 串行安装前的一次批量预取：同 Profile 的离线本体并成一条 pnpm add，依赖树
+   * 只解析一遍。命中的项在各自闭包里直接取结果，UI 仍然逐个显示；没命中
+   * （单成员组、批量通道缺失、批量整体报错）则各自回退单发。
+   */
+  async function prefetchLocalBatch(installables: InstallableItem[]): Promise<void> {
+    localBatchOutcome.clear()
+    const batch = options.installer.installLocalBatch
+    if (!batch) return
+    const targets = installables
+      .filter(item => Boolean(item.localTarget?.localDirectory))
+      .map(item => ({ packageName: item.packageName, ...item.localTarget! }))
+    for (const group of planLocalBatch(targets)) {
+      try {
+        const outcome = await batch(group as PackInstallTarget[])
+        for (const name of outcome.installed) localBatchOutcome.set(name, null)
+        for (const failure of outcome.failures) localBatchOutcome.set(failure.packageName, failure.reason)
+      } catch (error) {
+        // 批量通道本身出错时一条都不记，逐项闭包会回退到单发。
+        options.emitOutput?.('info', `离线本体批量安装未完成，改为逐个安装：${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+  }
+
+  /** 统一入口：先批量预取，再按原语义串行（保留 item-start/item-done 事件）。 */
+  async function runInstallables(installables: InstallableItem[]): Promise<SerialInstallResult> {
+    await prefetchLocalBatch(installables)
+    return runSerialInstall(installables, { emitEvent: options.emitEvent })
+  }
+
+  /** 离线本体项：已批量预取就取结果，否则回退单发。 */
+  function localInstallable(target: PackInstallTarget): InstallableItem {
+    return {
+      packageName: target.packageName,
+      offline: true,
+      localTarget: { localDirectory: target.localDirectory, profileName: target.profileName },
+      install: async () => {
+        if (localBatchOutcome.has(target.packageName)) {
+          const reason = localBatchOutcome.get(target.packageName)
+          if (reason) throw new Error(reason)
+          return
+        }
+        await installManifestPlugin(target)
+      },
+    }
+  }
+
   const log = (level: 'info' | 'error' | 'success', text: string): void => {
     options.emitOutput?.(level, text)
   }
@@ -643,22 +725,26 @@ export function createPackManager(options: PackManagerOptions): PackManager {
           }
         }
 
-        // Skill 与 Application 同样只纳入已存在且有来源/安装记录的资源。
+        // Skill 与预设一致：只要有本地本体就能带走，来源记录只决定导入侧用哪种方式还原。
+        // 没有来源记录的 Skill 导出时带上 skill-bodies，导入时离线安装。
         const skillReceipts = await readSkillReceipts(options.skillReceiptsPath)
         const installedSkills: string[] = []
         const skillReceiptsForPack: SkillInstallReceipt[] = []
+        const skillFormats = new Map<string, 'bundle' | 'flat'>()
         for (const skillName of request.skillNames ?? []) {
           if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(skillName)) {
             skippedFailures.push({ packageName: skillName, reason: 'Skill 名称非法。' })
             continue
           }
           const receipt = skillReceipts.find(item => item.name === skillName)
-          if (!receipt) {
-            skippedFailures.push({ packageName: skillName, reason: 'Skill 无来源记录，无法加入整合包' })
+          const localFormat = localSkillFormat(dshHome, skillName)
+          if (!receipt && !localFormat) {
+            skippedFailures.push({ packageName: skillName, reason: '未找到已安装的 Skill 本体' })
             continue
           }
           installedSkills.push(skillName)
-          skillReceiptsForPack.push(receipt)
+          if (receipt) skillReceiptsForPack.push(receipt)
+          skillFormats.set(skillName, receipt?.format ?? localFormat ?? 'bundle')
         }
 
         const applicationAddons = await options.applicationAddons.list()
@@ -683,7 +769,9 @@ export function createPackManager(options: PackManagerOptions): PackManager {
         const record: PackRecord = {
           id: packId,
           name: request.name,
-          description: request.description ?? '',
+          // 空的 Profile 描述不能原样写进 manifest：导入校验会拒绝空 description，
+          // 于是「自己导出的包自己导不回来」。这里给一个可读的兜底文案。
+          description: request.description?.trim() || `DSH 整合包：${request.name}`,
           version: '1.0.0',
           dshVersion,
           source: 'created',
@@ -695,7 +783,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
             enabled: currentProfile.plugins.find(item => item.packageName === packageName)?.enabled ?? false,
           })),
           ...(installedPresets.length > 0 ? { presets: installedPresets.map(name => ({ name, enabled: true })) } : {}),
-          ...(installedSkills.length > 0 ? { skills: installedSkills.map(name => ({ name, format: skillReceiptsForPack.find(r => r.name === name)?.format ?? 'bundle', enabled: true })) } : {}),
+          ...(installedSkills.length > 0 ? { skills: installedSkills.map(name => ({ name, format: skillFormats.get(name) ?? 'bundle', enabled: true })) } : {}),
           ...(installedApplications.length > 0 ? { applications: installedApplications.map(id => ({ id, name: applicationAddonsForPack.find(a => a.id === id)?.name ?? id, enabled: true })) } : {}),
           failures: result.failures.length > 0 ? result.failures : undefined,
         }
@@ -838,6 +926,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
       let skillStaging: string | null = null
       let presetStaging: string | null = null
       let presetBodiesDir: string | null = null
+      let skillBodiesDir: string | null = null
       try {
         // YAML and ZIP both materialize an independent Profile from their manifest.
         if (/\.ya?ml$/i.test(filePath)) {
@@ -871,7 +960,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
             }
           })
           options.emitEvent({ kind: 'status', message: `正在导入整合包清单「${manifest.name}」…` })
-          const { installed, failures } = await runSerialInstall(installables, { emitEvent: options.emitEvent })
+          const { installed, failures } = await runInstallables(installables)
           if (!options.unifiedProfiles) await reapplyCurrentSelection(settings, profileBeforeInstall)
           const installedPluginNames = selected
             .filter(entry => installed.includes(entry.packageName))
@@ -1050,7 +1139,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
                 nodeRange: null,
                 localDirectory: sharedBodyDir,
               }
-              installables.push({ packageName: plugin.packageName, offline: true, install: async () => { await installManifestPlugin(target) } })
+              installables.push(localInstallable(target))
             }
           }
 
@@ -1083,7 +1172,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
             }
           }
 
-          const { installed, failures } = await runSerialInstall(installables, { emitEvent: options.emitEvent })
+          const { installed, failures } = await runInstallables(installables)
           if (!options.unifiedProfiles) await reapplyCurrentSelection(settings, profileBeforeInstall)
           const result = buildInstallResult(packId, installed, failures)
 
@@ -1215,7 +1304,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
                 nodeRange: null,
                 localDirectory: sharedBodyDir,
               }
-              installables.push({ packageName, offline: true, install: async () => { await installManifestPlugin(target) } })
+              installables.push(localInstallable(target))
             } else if (importOptions?.mode === 'full') {
               installables.push({ packageName, offline: true, install: async () => { throw new Error(`完整安装缺少插件本体：${packageName}`) } })
             } else {
@@ -1276,11 +1365,27 @@ export function createPackManager(options: PackManagerOptions): PackManager {
           })
         }
 
-        // Skill：按清单里的 pin 信息直接安装，不重新分析 HEAD。
+        // Skill：优先用包内 skill-bodies 离线安装（无来源记录的 Skill 只有这一条路），
+        // 否则按清单里的 pin 信息直接安装，不重新分析 HEAD。
+        const skillBodiesStagePath = path.join(dshHome, '.pack-skill-bodies', packId)
+        await rm(skillBodiesStagePath, { recursive: true, force: true }).catch(() => undefined)
+        skillBodiesDir = skillBodiesStagePath
+        const skillBodies = await extractSkillBodiesFromPath(filePath, skillBodiesStagePath)
         for (const skillName of wantedSkills) {
           const skill = skillEntries.get(skillName)!
+          const bodyDir = skillBodies.get(skillName)
+          if (bodyDir) {
+            const format = skill.format ?? 'bundle'
+            const source = format === 'flat' ? path.join(bodyDir, `${skillName}.md`) : bodyDir
+            installables.push({
+              packageName: skillName,
+              offline: true,
+              install: async () => { await options.installer.installSkillLocal(dshHome, { name: skillName, format, sourceDir: source }) },
+            })
+            continue
+          }
           if (!skill.repository || !skill.sourcePath || !skill.revision) {
-            installables.push({ packageName: skillName, install: async () => { throw new Error('清单中缺少该 Skill 的来源信息') } })
+            installables.push({ packageName: skillName, install: async () => { throw new Error('清单中缺少该 Skill 的来源信息，包内也没有离线本体') } })
             continue
           }
           installables.push({
@@ -1376,6 +1481,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
         if (skillStaging) await rm(skillStaging, { recursive: true, force: true }).catch(() => undefined)
         if (presetStaging) await rm(presetStaging, { recursive: true, force: true }).catch(() => undefined)
         if (presetBodiesDir) await rm(presetBodiesDir, { recursive: true, force: true }).catch(() => undefined)
+        if (skillBodiesDir) await rm(skillBodiesDir, { recursive: true, force: true }).catch(() => undefined)
         active = false
       }
     },
@@ -1500,13 +1606,26 @@ export function createPackManager(options: PackManagerOptions): PackManager {
             manifestPresetNames.add(preset.name)
           }
         }
+        // Skill 同理：没有来源记录的凭本地本体离线导出，导入侧不用联网。
+        const manifestSkillNames = new Set((manifest.skills ?? []).map(entry => entry.name))
+        for (const skill of record.skills ?? []) {
+          if (!manifestSkillNames.has(skill.name)) {
+            manifest.skills = [...(manifest.skills ?? []), { name: skill.name, format: skill.format }]
+            manifestSkillNames.add(skill.name)
+          }
+        }
         // 只收集 manifest 引用的插件本体：profile 里可能混入未被选入包的手动安装插件，不应进包。
         const packageNames = manifest.plugins.map(entry => entry.packageName)
-        // 预设本体也打进 zip：换机导入时可完全离线安装。
+        // 预设与 Skill 本体也打进 zip：换机导入时可完全离线安装。
         const presetDirs = new Map<string, string>()
         for (const preset of record.presets ?? []) {
           const dir = path.join(dshHome, '.agent-presets', preset.name)
           if (existsSync(dir)) presetDirs.set(preset.name, dir)
+        }
+        const skillDirs = new Map<string, string>()
+        for (const skill of record.skills ?? []) {
+          const source = localSkillSource(dshHome, skill.name)
+          if (source) skillDirs.set(skill.name, source)
         }
         const packProfileDir = path.join(dshHome, 'profiles', options.unifiedProfiles ? packId : settings.profileName)
         const exportRoot = path.join(options.snapshotRoot, 'exports')
@@ -1519,7 +1638,7 @@ export function createPackManager(options: PackManagerOptions): PackManager {
           // entries remain reinstallable from the registry and therefore do
           // not inflate the lightweight archive.
           : manifest.plugins.filter(entry => entry.source === 'local' || (!entry.repository && entry.source !== 'npm')).map(entry => entry.packageName)
-        const { missing } = await buildPackExportToFile(packProfileDir, manifest, bodyNames, zipPath, presetDirs)
+        const { missing } = await buildPackExportToFile(packProfileDir, manifest, bodyNames, zipPath, presetDirs, skillDirs)
         if (missing.length > 0) {
           const message = `导出 Profile「${packId}」失败：以下插件缺少本地本体（${missing.join('、')}），无法生成${exportMode === 'full' ? '全量' : '离线'}包。`
           log('error', message)

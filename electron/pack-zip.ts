@@ -34,10 +34,13 @@ export interface PackZipInspection {
   hasBodies: boolean
   bodyPackageNames: string[]
   presetBodyNames: string[]
+  /** 包内携带本体的 Skill 名称（`skill-bodies/<name>/…`）。 */
+  skillBodyNames: string[]
 }
 
 const PLUGIN_BODIES_PREFIX = 'plugin-bodies/'
 const PRESET_BODIES_PREFIX = 'preset-bodies/'
+const SKILL_BODIES_PREFIX = 'skill-bodies/'
 
 /** 标准包清单读取上限（清单本身很小，给一个安全余量即可）。 */
 const MAX_MANIFEST_BYTES = 1 * 1024 * 1024
@@ -209,6 +212,7 @@ export function inspectPackZip(buffer: Uint8Array, limits: PackZipLimits = DEFAU
 
   const bodyPackageNames = new Set<string>()
   const presetBodyNames = new Set<string>()
+  const skillBodyNames = new Set<string>()
   for (const entry of entries) {
     if (entry.isDirectory) continue
     const safe = safeArchivePath(entry.entryName)
@@ -223,12 +227,18 @@ export function inspectPackZip(buffer: Uint8Array, limits: PackZipLimits = DEFAU
       const name = rest.split('/')[0]
       if (name && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) presetBodyNames.add(name)
     }
+    if (rel.startsWith(SKILL_BODIES_PREFIX)) {
+      const rest = rel.slice(SKILL_BODIES_PREFIX.length)
+      const name = rest.split('/')[0]
+      if (name && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) skillBodyNames.add(name)
+    }
   }
   return {
     manifest,
     hasBodies: bodyPackageNames.size > 0,
     bodyPackageNames: [...bodyPackageNames],
     presetBodyNames: [...presetBodyNames],
+    skillBodyNames: [...skillBodyNames],
   }
 }
 
@@ -576,6 +586,7 @@ export async function inspectPackZipFromPath(
 
     const bodyPackageNames = new Set<string>()
     const presetBodyNames = new Set<string>()
+    const skillBodyNames = new Set<string>()
     for (const entry of handle.entries) {
       if (entry.isDirectory) continue
       const safe = safeArchivePath(entry.entryName)
@@ -590,12 +601,18 @@ export async function inspectPackZipFromPath(
         const name = rest.split('/')[0]
         if (name && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) presetBodyNames.add(name)
       }
+      if (rel.startsWith(SKILL_BODIES_PREFIX)) {
+        const rest = rel.slice(SKILL_BODIES_PREFIX.length)
+        const name = rest.split('/')[0]
+        if (name && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) skillBodyNames.add(name)
+      }
     }
     return {
       manifest,
       hasBodies: bodyPackageNames.size > 0,
       bodyPackageNames: [...bodyPackageNames],
       presetBodyNames: [...presetBodyNames],
+      skillBodyNames: [...skillBodyNames],
     }
   } finally {
     await handle.close()
@@ -670,12 +687,52 @@ export async function extractPresetBodiesFromPath(
   }
 }
 
-/** 用 yazl 流式把整合包写入文件（大包导出不占内存）。 */
+/** 文件路径版解出 skill-bodies/<name>/… 到 workDir/<name>/。 */
+export async function extractSkillBodiesFromPath(
+  filePath: string,
+  workDir: string,
+  limits: PackZipLimits = DEFAULT_PACK_ZIP_LIMITS,
+): Promise<Map<string, string>> {
+  const handle = await openStandardPackZipFromPath(filePath, limits)
+  try {
+    const resolvedWorkDir = path.resolve(workDir)
+    await mkdir(resolvedWorkDir, { recursive: true })
+    const result = new Map<string, string>()
+    const budget = { extracted: 0 }
+    for (const entry of handle.entries) {
+      if (entry.isDirectory) continue
+      const safe = safeArchivePath(entry.entryName)
+      if (!safe) throw new Error('整合包包含不安全路径。')
+      const rel = relForEntry(safe, handle.stripRoot)
+      if (!rel.startsWith(SKILL_BODIES_PREFIX)) continue
+      const rest = rel.slice(SKILL_BODIES_PREFIX.length)
+      const [name, ...restParts] = rest.split('/')
+      if (!name || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name) || restParts.length === 0) continue
+      const skillDirectory = path.join(resolvedWorkDir, name)
+      assertInside(resolvedWorkDir, skillDirectory)
+      const target = path.join(skillDirectory, ...restParts)
+      assertInside(resolvedWorkDir, target)
+      await handle.writeEntryToFile(entry, target, { budget, maxTotalBytes: limits.maxUnpackedBytes })
+      result.set(name, skillDirectory)
+    }
+    return result
+  } finally {
+    await handle.close()
+  }
+}
+
+/**
+ * 用 yazl 流式把整合包写入文件（大包导出不占内存）。
+ *
+ * `skillDirs` 的值可以是 Skill 目录（bundle）或单个 `.md`（flat）：
+ * 没有来源记录的 Skill 只能靠这份本体在导入侧离线还原。
+ */
 export async function buildPackZipToFile(
   manifest: PackManifest,
   bodyDirs: Map<string, string>,
   outputPath: string,
   presetDirs: Map<string, string> = new Map(),
+  skillDirs: Map<string, string> = new Map(),
 ): Promise<void> {
   const zip = new yazl.ZipFile()
   const manifestBuffer = Buffer.from(serializePackManifest(manifest), 'utf8')
@@ -732,6 +789,45 @@ export async function buildPackZipToFile(
         if (stats.isDirectory()) {
           stack.push({ dir: childPath, rel: childRel })
         } else if (stats.isFile()) {
+          zip.addFile(childPath, `${base}/${childRel}`)
+        }
+      }
+    }
+  }
+
+  for (const [skillName, source] of skillDirs) {
+    const base = `${SKILL_BODIES_PREFIX}${skillName}`
+    let stats
+    try {
+      stats = statSync(source)
+    } catch {
+      throw new Error(`无法读取 Skill 本体：${source}。`)
+    }
+    if (stats.isFile()) {
+      zip.addFile(source, `${base}/${path.basename(source)}`)
+      continue
+    }
+    const stack: Array<{ dir: string; rel: string }> = [{ dir: source, rel: '' }]
+    while (stack.length > 0) {
+      const current = stack.pop()!
+      let childNames: string[] = []
+      try {
+        childNames = readdirSync(current.dir)
+      } catch {
+        throw new Error(`无法读取 Skill 本体目录：${current.dir}。`)
+      }
+      for (const childName of childNames) {
+        const childPath = path.join(current.dir, childName)
+        let childStats
+        try {
+          childStats = statSync(childPath)
+        } catch {
+          throw new Error(`无法读取 Skill 本体文件：${childPath}。`)
+        }
+        const childRel = current.rel ? `${current.rel}/${childName}` : childName
+        if (childStats.isDirectory()) {
+          stack.push({ dir: childPath, rel: childRel })
+        } else if (childStats.isFile()) {
           zip.addFile(childPath, `${base}/${childRel}`)
         }
       }

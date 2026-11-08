@@ -222,6 +222,15 @@ function demoDshMarketCatalog(): DshMarketCatalog {
   }
 }
 
+/** Demo 市场同样要按卡片身份定位：先看仓库地址，再退到名字，避免同名条目串台。 */
+function findDemoMarketEntry(name: string, url?: string): DshMarketCatalog['plugins'][number] | undefined {
+  if (url) {
+    const byUrl = demoDshMarketPlugins.find(item => item.url === url)
+    if (byUrl) return byUrl
+  }
+  return demoDshMarketPlugins.find(item => item.name === name || item.npm === name)
+}
+
 function dshMarketRepository(url: string): string | null {
   try {
     const parsed = new URL(url)
@@ -983,8 +992,8 @@ export const demoApi: LauncherApi = {
     await wait(180)
     return demoDshMarketCatalog()
   },
-  installDshMarketPlugin: async name => {
-    const plugin = demoDshMarketPlugins.find(item => item.name === name || item.npm === name)
+  installDshMarketPlugin: async (name, _profileName, _exactVersion, url) => {
+    const plugin = findDemoMarketEntry(name, url)
     if (!plugin) throw new Error('插件不在 dsh-market 精选目录中。')
     dshMarketProgressListeners.forEach(listener => listener({ name, phase: 'downloading', percent: 52, message: '正在下载插件及依赖' }))
     await wait(500)
@@ -992,8 +1001,8 @@ export const demoApi: LauncherApi = {
     upsertDemoPluginFromMarket(plugin)
     return demoDshMarketPlugins.filter(item => item.installed)
   },
-  updateDshMarketPlugin: async name => {
-    const plugin = demoDshMarketPlugins.find(item => item.name === name || item.npm === name)
+  updateDshMarketPlugin: async (name, _profileName, url) => {
+    const plugin = findDemoMarketEntry(name, url)
     if (!plugin?.installed) throw new Error('插件尚未安装，不能更新。')
     dshMarketProgressListeners.forEach(listener => listener({ name, phase: 'verifying', percent: 86, message: '正在检查插件更新' }))
     await wait(450)
@@ -1001,16 +1010,16 @@ export const demoApi: LauncherApi = {
     upsertDemoPluginFromMarket(plugin)
     return demoDshMarketPlugins.filter(item => item.installed)
   },
-  uninstallDshMarketPlugin: async name => {
-    const plugin = demoDshMarketPlugins.find(item => item.name === name)
+  uninstallDshMarketPlugin: async (name, _profileName, url) => {
+    const plugin = findDemoMarketEntry(name, url)
     if (!plugin?.installed) throw new Error('插件尚未安装。')
     await wait(300)
     plugin.installed = false; plugin.enabled = false; plugin.version = null
     removeDemoPluginFromMarket(plugin)
     return demoDshMarketPlugins.filter(item => item.installed)
   },
-  toggleDshMarketPlugin: async (name, enabled) => {
-    const plugin = demoDshMarketPlugins.find(item => item.name === name || item.npm === name)
+  toggleDshMarketPlugin: async (name, enabled, url) => {
+    const plugin = findDemoMarketEntry(name, url)
     if (!plugin?.installed) throw new Error('插件尚未安装。')
     plugin.enabled = enabled
     syncDemoPluginStateFromMarket(plugin)

@@ -34,11 +34,12 @@ describe('runtime version indexes', () => {
       '--loglevel=verbose',
       '--ignore-scripts',
       '--prefer-offline',
-      '--fetch-timeout=30000',
-      '--fetch-retries=1',
+      // 定制分支放宽了 DSH 安装的网络预算：30s/1 次在国内镜像链路上会整包失败。
+      '--fetch-timeout=180000',
+      '--fetch-retries=5',
       '--fetch-retry-factor=2',
-      '--fetch-retry-mintimeout=1000',
-      '--fetch-retry-maxtimeout=10000',
+      '--fetch-retry-mintimeout=2000',
+      '--fetch-retry-maxtimeout=60000',
       '@deepseek-ai/dsh@0.1.1-rc.1',
     ])
     expect(buildManagedDshPnpmArgs('C:\\dsh\\versions\\0.1.1-rc.1', 'v0.1.1-rc.1')).toEqual([
@@ -49,8 +50,11 @@ describe('runtime version indexes', () => {
       '--lockfile=true',
       '--ignore-scripts',
       '--reporter=append-only',
-      '--fetch-timeout=30000',
-      '--fetch-retries=1',
+      '--network-concurrency=8',
+      '--fetch-timeout=180000',
+      '--fetch-retries=5',
+      '--fetch-retry-mintimeout=2000',
+      '--fetch-retry-maxtimeout=120000',
       '@deepseek-ai/dsh@0.1.1-rc.1',
     ])
   })

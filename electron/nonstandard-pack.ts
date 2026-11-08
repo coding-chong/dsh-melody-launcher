@@ -57,7 +57,7 @@ interface DistributionManifest {
 export interface NonstandardPackOptions {
   githubAuth: GitHubAuthService
   installer: Installer
-  dshMarket: { load(): Promise<DshMarketCatalog>; install?(name: string, profileName?: string, exactVersion?: string | null): Promise<unknown> }
+  dshMarket: { load(): Promise<DshMarketCatalog>; install?(name: string, profileName?: string, exactVersion?: string | null, url?: string | null): Promise<unknown> }
   profiles: ProfileService
   readSettings: () => Promise<AppSettings>
   pluginReceiptsPath: string
@@ -294,7 +294,7 @@ async function findLocalPackages(root: string): Promise<Map<string, { directory:
   return result
 }
 
-function marketMatch(catalog: DshMarketCatalog, item: NonstandardPackPluginPreview): { source: 'market' | 'github'; repository: string | null; targetId: string | null } | null {
+function marketMatch(catalog: DshMarketCatalog, item: NonstandardPackPluginPreview): { source: 'market' | 'github'; repository: string | null; targetId: string | null; url: string | null } | null {
   // A distribution manifest explicitly declaring GitHub or local/link source
   // is authoritative. Do not let a same-named npm Market entry silently turn
   // a pinned source plugin into a registry install.
@@ -303,7 +303,8 @@ function marketMatch(catalog: DshMarketCatalog, item: NonstandardPackPluginPrevi
   const match = catalog.plugins.find(plugin => plugin.npm?.toLowerCase() === needle || (item.declaredSource !== 'npm' && (plugin.name.toLowerCase() === needle || (item.repository && plugin.url.toLowerCase().includes(item.repository.toLowerCase())))))
   if (!match) return null
   const urlMatch = /github\.com\/([^/]+\/[^/]+)/i.exec(match.url)
-  return { source: match.npm ? 'market' : 'github', repository: match.npm ? null : (urlMatch?.[1]?.replace(/\.git$/, '') ?? item.repository), targetId: match.npm ?? match.name }
+  // url 是目录条目的唯一身份：同名条目（如 4 个 dsh-pet）只能靠它区分。
+  return { source: match.npm ? 'market' : 'github', repository: match.npm ? null : (urlMatch?.[1]?.replace(/\.git$/, '') ?? item.repository), targetId: match.npm ?? match.name, url: match.url }
 }
 
 export async function analyzeNonstandardPackRepository(options: NonstandardPackOptions, url: string): Promise<NonstandardPackImportPreview> {
@@ -398,6 +399,7 @@ export async function analyzeNonstandardPackRepository(options: NonstandardPackO
       plugin.source = match.source
       plugin.sourceLabel = match.source === 'market' ? 'DSH Market' : 'GitHub'
       plugin.targetId = match.targetId ?? plugin.targetId
+      if (match.url) plugin.marketUrl = match.url
       if (match.repository) plugin.repository = match.repository
     }
     if (plugin.source === 'local') continue
@@ -509,7 +511,7 @@ export async function importNonstandardPackRepository(options: NonstandardPackOp
         if (!local) throw new Error('整合包内没有找到本地插件本体。')
         await options.installer.installLocalPlugin({ packageName: plugin.packageName, directory: local.directory, repository: preview.repository, commit: preview.commit ?? undefined, version: plugin.version ?? undefined }, profileName)
       } else if (plugin.source === 'market' && options.dshMarket.install && plugin.targetId) {
-        await options.dshMarket.install(plugin.targetId, profileName, plugin.version)
+        await options.dshMarket.install(plugin.targetId, profileName, plugin.version, plugin.marketUrl)
       } else if (plugin.source === 'npm') {
         await options.installer.installNpmPackage({ packageName: plugin.packageName, version: plugin.version ?? undefined, repository: `npm:${plugin.packageName}` }, profileName)
       } else {

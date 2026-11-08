@@ -135,6 +135,18 @@ function profileReadSelection(settings: AppSettings): { dshHome: string; profile
   return { dshHome, profileName }
 }
 
+/**
+ * 市场卡片把自己的仓库地址一并送过来，用来在同名条目之间消歧。
+ * 这里只做形状校验：非字符串/空串当作没给，超长直接拒绝，避免任意字符串进安装队列。
+ */
+function marketEntryUrl(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  if (trimmed === '') return undefined
+  if (trimmed.length > 500) throw new Error('dsh-market 条目地址无效。')
+  return trimmed
+}
+
 export function registerIpcHandlers(deps: IpcDependencies): void {
   const { settings, pluginReceiptsPath, launcherAssetsUserData, runtime, installer, launcherUpdater, pluginTrial, aiInstaller, copilot, packManager, githubAuth, applicationAddons, catalogSync, dshMarket, recommendedWebUi, runtimeVersions, profiles, nonstandardPack, apiProbe, installQueue, deepSeekBalance, dshUsageService, newsCachePath, skillsShIndexPath } = deps
   const linkedComponents = createLinkedComponentController({
@@ -246,20 +258,22 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
   })
   ipcMain.handle(IPC.customApiList, async () => {
     const current = await settings.read()
-    return listCustomApiProviders(current.dshHome, current.profileName)
+    // 模型路由跟随活跃 Profile：DSH 0.2 起配置界面写的是 Profile 的组合补丁，
+    // 直接读写 $DSH_HOME/settings.yaml 会让界面与 Profile 永久对不上。
+    return listCustomApiProviders({ dshHome: current.dshHome, profileName: current.profileName })
   })
   ipcMain.handle(IPC.customApiSave, async (_event, input: CustomApiProviderInput) => {
     const current = await settings.read()
-    return saveCustomApiProvider(current.dshHome, input, current.profileName)
+    return saveCustomApiProvider({ dshHome: current.dshHome, profileName: current.profileName }, input)
   })
   ipcMain.handle(IPC.customApiSync, async () => {
     const current = await settings.read()
-    return syncCustomApiProviders(current.dshHome, current.profileName)
+    return syncCustomApiProviders({ dshHome: current.dshHome, profileName: current.profileName })
   })
   ipcMain.handle(IPC.customApiRemove, async (_event, route: string) => {
     if (typeof route !== 'string') throw new Error('自定义 API 路由格式无效。')
     const current = await settings.read()
-    return removeCustomApiProvider(current.dshHome, route, current.profileName)
+    return removeCustomApiProvider({ dshHome: current.dshHome, profileName: current.profileName }, route)
   })
   ipcMain.handle(IPC.customApiTest, async (_event, target: ApiProbeTarget) => {
     if (!target || typeof target !== 'object') throw new Error('API 检测目标无效。')
@@ -645,32 +659,34 @@ export function registerIpcHandlers(deps: IpcDependencies): void {
     )
   })
   ipcMain.handle(IPC.dshMarketLoad, (_event, force?: boolean) => dshMarket.load(force === true))
-  ipcMain.handle(IPC.dshMarketInstall, async (_event, payload: string | { name: string; profileName?: string; exactVersion?: string }) => {
+  ipcMain.handle(IPC.dshMarketInstall, async (_event, payload: string | { name: string; profileName?: string; exactVersion?: string; url?: string }) => {
     const name = typeof payload === 'string' ? payload : payload?.name
     if (typeof name !== 'string' || name.length === 0 || name.length > 200) throw new Error('dsh-market 插件名称无效。')
+    const marketUrl = typeof payload === 'string' ? undefined : marketEntryUrl(payload?.url)
     const job = typeof payload === 'string'
-      ? { action: 'install' as const, name }
-      : { action: 'install' as const, name, profileName: payload.profileName, exactVersion: payload.exactVersion }
+      ? { action: 'install' as const, name, url: marketUrl }
+      : { action: 'install' as const, name, url: marketUrl, profileName: payload.profileName, exactVersion: payload.exactVersion }
     return installQueue.enqueue('dsh-market', `安装 DSH Market 插件 ${name}`, job)
   })
-  ipcMain.handle(IPC.dshMarketUpdate, async (_event, payload: string | { name: string; profileName?: string }) => {
+  ipcMain.handle(IPC.dshMarketUpdate, async (_event, payload: string | { name: string; profileName?: string; url?: string }) => {
     const name = typeof payload === 'string' ? payload : payload?.name
     if (typeof name !== 'string' || name.length === 0 || name.length > 200) throw new Error('dsh-market 插件名称无效。')
+    const marketUrl = typeof payload === 'string' ? undefined : marketEntryUrl(payload?.url)
     const job = typeof payload === 'string'
-      ? { action: 'update' as const, name }
-      : { action: 'update' as const, name, profileName: payload.profileName }
+      ? { action: 'update' as const, name, url: marketUrl }
+      : { action: 'update' as const, name, url: marketUrl, profileName: payload.profileName }
     return installQueue.enqueue('dsh-market', `更新 DSH Market 插件 ${name}`, job)
   })
-  ipcMain.handle(IPC.dshMarketUninstall, async (_event, payload: string | { name: string; profileName?: string }) => {
+  ipcMain.handle(IPC.dshMarketUninstall, async (_event, payload: string | { name: string; profileName?: string; url?: string }) => {
     const name = typeof payload === 'string' ? payload : payload?.name
     assertProfileMutationAvailable()
     if (typeof name !== 'string' || name.length === 0 || name.length > 200) throw new Error('dsh-market 插件名称无效。')
-    return dshMarket.uninstall(name, typeof payload === 'string' ? undefined : payload.profileName)
+    return dshMarket.uninstall(name, typeof payload === 'string' ? undefined : payload.profileName, typeof payload === 'string' ? undefined : marketEntryUrl(payload?.url))
   })
-  ipcMain.handle(IPC.dshMarketToggle, async (_event, payload: { name: string; enabled: boolean }) => {
+  ipcMain.handle(IPC.dshMarketToggle, async (_event, payload: { name: string; enabled: boolean; url?: string }) => {
     assertProfileMutationAvailable()
     if (!payload || typeof payload.name !== 'string' || payload.name.length === 0 || payload.name.length > 200) throw new Error('dsh-market 插件名称无效。')
-    return dshMarket.toggle(payload.name, Boolean(payload.enabled))
+    return dshMarket.toggle(payload.name, Boolean(payload.enabled), marketEntryUrl(payload.url))
   })
   ipcMain.handle(IPC.dshMarketUpdates, (_event, force?: boolean) => dshMarket.updates(Boolean(force)))
   ipcMain.handle(IPC.recommendedStatus, () => recommendedWebUi.status())

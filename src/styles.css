@@ -319,8 +319,13 @@ input:focus-visible {
   overflow: hidden;
   color: #f8faf7;
   background-color: #20231f;
-  /* 自定义插图由 App.tsx 写入 --launcher-background-image（launcher-asset://）。 */
-  background-image: var(--launcher-background-image, url('/launcher-background.png'));
+  /* 自定义插图由 App.tsx 写入 --launcher-background-image（launcher-asset://）。
+     兜底图用相对路径且带 `../`：public/ 的图落在 dist 根，而打包后的 CSS 在
+     dist/assets/ 下，不上去一级会指向 dist/assets/launcher-background0.png；
+     dev 下 CSS 来自 /src/，`../` 正好回到 public 根。文件名也要和 public/ 一致
+     —— 原写法 `/launcher-background.png`（带盘符根且少了 0）在 file:// 下永远
+     404。 */
+  background-image: var(--launcher-background-image, url('../launcher-background0.png'));
   background-position: center;
   background-size: cover;
 }
@@ -1776,15 +1781,16 @@ input:focus-visible {
 
 .manager-edge-actions {
   position: absolute;
-  z-index: 45;
-  right: 1px;
-  bottom: 1px;
+  /* 运行与日志抽屉是 z-index 80；浮动按钮必须压在它之上，否则半隐藏时会被盖住。 */
+  z-index: 90;
+  right: 10px;
+  bottom: 10px;
   display: grid;
-  width: 38px;
-  grid-template-rows: 34px 18px;
+  width: 36px;
+  grid-template-rows: 34px 22px;
   align-items: center;
   justify-items: end;
-  gap: 1px;
+  gap: 4px;
   pointer-events: none;
   transition: right 220ms cubic-bezier(.2, .8, .2, 1);
 }
@@ -1792,22 +1798,54 @@ input:focus-visible {
 .manager-edge-actions button {
   pointer-events: auto;
   box-shadow: none;
-  background: transparent;
+}
+
+/* 只有图标的浮动按钮没有文字可读，悬停/聚焦时补一条气泡说明用途。 */
+.manager-edge-actions [data-hint]::after,
+.manager-back[data-hint]::after {
+  content: attr(data-hint);
+  position: absolute;
+  z-index: 3;
+  right: calc(100% + 8px);
+  bottom: 50%;
+  transform: translateY(50%);
+  padding: 4px 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  color: var(--ink);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 16px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 140ms ease;
+}
+
+.manager-edge-actions [data-hint]:hover::after,
+.manager-edge-actions [data-hint]:focus-visible::after,
+.manager-back[data-hint]:hover::after,
+.manager-back[data-hint]:focus-visible::after {
+  opacity: 1;
 }
 
 .manager-edge-actions .copilot-toggle,
 .manager-edge-actions .copilot-toggle.active,
 .manager-edge-actions .copilot-toggle.busy {
-  border-color: transparent;
-  background: transparent;
-  box-shadow: none;
-  transition: transform 220ms cubic-bezier(.2, .8, .2, 1);
+  /* 透明按钮压在深色日志区上几乎看不见，给它一层可读的底色。 */
+  border-color: var(--line-strong);
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  box-shadow: 0 3px 10px rgba(30, 45, 36, 0.16);
+  transition: transform 220ms cubic-bezier(.2, .8, .2, 1), background 160ms ease, border-color 160ms ease, color 160ms ease;
 }
 
 .manager-edge-actions .copilot-toggle:hover,
 .manager-edge-actions .copilot-toggle:focus-visible {
-  border-color: transparent;
-  background: transparent;
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--surface));
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .manager-corner-mark {
@@ -1823,12 +1861,12 @@ input:focus-visible {
 /* 独立于侧栏容器，始终以舞台右下角为锚点，窗口调整大小时不会漂移。 */
 .manager-back {
   position: absolute;
-  z-index: 46;
-  right: 0;
-  bottom: 0;
+  z-index: 90;
+  right: 10px;
+  bottom: 10px;
   display: grid;
-  width: 18px;
-  height: 18px;
+  width: 22px;
+  height: 22px;
   margin: 0;
   padding: 0;
   place-items: end;
@@ -1837,9 +1875,24 @@ input:focus-visible {
   border-radius: 0;
   background: transparent;
   box-shadow: none;
-  overflow: hidden;
+  /* 角标本身保持 18px 视觉，但不再裁掉悬停气泡。 */
+  overflow: visible;
   transform: none;
   transition: none;
+}
+
+/* 18px 的角标太小，用伪元素把可点区域向外扩到 38px。 */
+.manager-back::before {
+  content: '';
+  position: absolute;
+  inset: -8px;
+  border-radius: 8px;
+  background: transparent;
+}
+
+.manager-back:hover,
+.manager-back:focus-visible {
+  color: var(--accent-hover);
 }
 
 /* Copilot 打开后，侧栏按钮贴着工作区/侧栏分界线；返回按钮仍固定在窗口最右下角。 */
@@ -2364,7 +2417,8 @@ input:focus-visible {
   min-height: 0;
   margin-top: 0;
   overflow: auto;
-  padding: 10px 12px;
+  /* 右下角浮着 Copilot/返回按钮，日志文字给它们让出位置，避免被压住。 */
+  padding: 10px 46px 34px 12px;
   border: 1px solid #313934;
   border-radius: 7px;
   color: #cbd2cd;
@@ -3710,9 +3764,10 @@ input:focus-visible {
   min-width: 0;
 }
 
+/* 最后一列要装下 4 个 27px 图标按钮（含 2px gap = 114px），三按钮时代是 90px。 */
 .plugin-row {
   display: grid;
-  grid-template-columns: 48px 44px minmax(140px, 0.9fr) minmax(130px, 1.1fr) 65px 90px;
+  grid-template-columns: 48px 44px minmax(140px, 0.9fr) minmax(130px, 1.1fr) 65px 118px;
   min-width: 0;
   min-height: 40px;
   align-items: center;
@@ -3742,6 +3797,80 @@ input:focus-visible {
 .plugin-row.disabled {
   color: var(--muted);
   background: #fbfcfb;
+}
+
+/* 共享池里的候选：本体在别的 Profile 或池子里，本 Profile 没有声明它。
+   左侧虚线 + 米色底 + 淡化，一眼和「已装但停用」区分开。 */
+.plugin-row.candidate {
+  position: relative;
+  color: var(--quiet);
+  background: #fdfbf5;
+}
+
+.plugin-row.candidate::before {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: repeating-linear-gradient(180deg, #d9c9a3 0 4px, transparent 4px 8px);
+  content: "";
+}
+
+.plugin-row.candidate:hover {
+  background: #fbf7ec;
+}
+
+/* 选中态的实心色条要压过候选虚线。 */
+.plugin-row.selected::before {
+  background: var(--accent);
+}
+
+.pool-candidate-badge {
+  display: inline-flex !important;
+  margin-left: 6px;
+  align-items: center;
+  padding: 0 5px !important;
+  border: 1px dashed #c9b791;
+  border-radius: 999px;
+  color: #8a6d3b !important;
+  font-size: 9px !important;
+  font-weight: 600 !important;
+  vertical-align: 1px;
+  white-space: nowrap;
+}
+
+/* 滚轮翻页提示：两套界面之间是纯手势切换，没有任何按钮对应，不写出来用户既
+   发现不了也回不去。淡色常驻 + 轻微呼吸，不抢视觉。 */
+.scroll-hint {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  z-index: 40;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 13px;
+  border-radius: 999px;
+  background: rgb(24 32 28 / 55%);
+  color: #f2f7f3;
+  font-size: 12px;
+  letter-spacing: 0.2px;
+  pointer-events: none;
+  transform: translateX(-50%);
+  animation: scroll-hint-breathe 3.2s ease-in-out infinite;
+}
+
+@keyframes scroll-hint-breathe {
+  0%,
+  100% { opacity: 0.55; }
+
+  50% { opacity: 0.9; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scroll-hint {
+    opacity: 0.7;
+    animation: none;
+  }
 }
 
 .plugin-row.dragging {
@@ -3956,6 +4085,12 @@ input:focus-visible {
   height: 27px;
   border-color: transparent;
   background: transparent;
+}
+
+/* Row-level uninstall: stays quiet until hover, then reads as destructive. */
+.row-actions button.row-danger:hover:not(:disabled) {
+  color: var(--danger);
+  background: #fdeceb;
 }
 
 .plugin-details {
@@ -6441,6 +6576,10 @@ input:focus-visible {
   color: var(--muted);
   font-size: 11px;
   line-height: 18px;
+}
+
+.profile-name-dialog {
+  width: min(460px, calc(100vw - 32px));
 }
 
 .update-dialog {

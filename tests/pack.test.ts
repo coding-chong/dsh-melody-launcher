@@ -1133,3 +1133,85 @@ describe.skip('legacy listPacks tests（独立 Profile 语义已废弃）', () =
     expect(statuses.find(status => status.id === 'pack-two')?.enabled).toBe(false)
   })
 })
+
+// ---------------------------------------------------------------------------
+// 没有安装记录的本地 Skill：随包离线导出与离线安装
+// ---------------------------------------------------------------------------
+
+describe('无来源记录的 Skill 离线进出包', () => {
+  async function seedLocalSkill(env: Awaited<ReturnType<typeof makeEnv>>, name: string, doc: string): Promise<string> {
+    const directory = path.join(env.dshHome, 'skills', name)
+    await mkdir(directory, { recursive: true })
+    await writeFile(path.join(directory, 'SKILL.md'), doc, 'utf8')
+    return directory
+  }
+
+  it('导出时把本地 Skill 本体写进 skill-bodies，并补进清单', async () => {
+    const env = await makeEnv()
+    const stub = makeInstallerStub()
+    stub.readProfile.mockResolvedValue({ ...defaultProfile, plugins: [] })
+    const store = makeSettings(env.dshHome)
+    const { manager } = makeManager(env, stub, store)
+    await upsertPackRecord(env.registryPath, {
+      ...recordFor('pack-skill'),
+      description: '离线技能包',
+      skills: [{ name: 'my-skill', format: 'bundle', enabled: true }],
+    })
+    await seedLocalSkill(env, 'my-skill', SKILL_DOC)
+
+    const { zipPath } = await manager.exportPack('pack-skill')
+    const inspection = inspectPackZip(await readFile(zipPath))
+    expect(inspection.manifest.skills).toEqual([{ name: 'my-skill', format: 'bundle' }])
+    expect(inspection.skillBodyNames).toEqual(['my-skill'])
+    const entries = new AdmZip(zipPath).getEntries().map(entry => entry.entryName)
+    expect(entries).toContain('skill-bodies/my-skill/SKILL.md')
+  })
+
+  it('导入时用包内本体离线安装，不依赖仓库来源', async () => {
+    const env = await makeEnv()
+    const exporter = makeInstallerStub()
+    exporter.readProfile.mockResolvedValue({ ...defaultProfile, plugins: [] })
+    const exportStore = makeSettings(env.dshHome)
+    const { manager: exportManager } = makeManager(env, exporter, exportStore)
+    await upsertPackRecord(env.registryPath, {
+      ...recordFor('pack-skill'),
+      description: '离线技能包',
+      skills: [{ name: 'my-skill', format: 'bundle', enabled: true }],
+    })
+    await seedLocalSkill(env, 'my-skill', SKILL_DOC)
+    const { zipPath } = await exportManager.exportPack('pack-skill')
+
+    const stub = makeInstallerStub()
+    stub.readProfile.mockResolvedValue({ ...defaultProfile, plugins: [] })
+    // 暂存目录在导入结束时会被清掉，所以在安装回调里取本体内容。
+    const captured: Array<{ name: string; format: string; content: string }> = []
+    stub.installSkillLocal.mockImplementation(async (_dshHome: string, skill: { name: string; format: 'bundle' | 'flat'; sourceDir: string }) => {
+      captured.push({
+        name: skill.name,
+        format: skill.format,
+        content: await readFile(path.join(skill.sourceDir, 'SKILL.md'), 'utf8'),
+      })
+    })
+    const store = makeSettings(env.dshHome, 'web')
+    const { manager } = makeManager(env, stub, store)
+
+    await manager.importPack(zipPath)
+
+    expect(stub.installSkillPinned).not.toHaveBeenCalled()
+    expect(stub.installSkillLocal).toHaveBeenCalledTimes(1)
+    expect(stub.installSkillLocal.mock.calls[0]![0]).toBe(env.dshHome)
+    expect(captured).toEqual([{ name: 'my-skill', format: 'bundle', content: SKILL_DOC }])
+  })
+
+  it('清单里既没有来源也没有本体的 Skill 仍然进 failures', async () => {
+    const env = await makeEnv()
+    const stub = makeInstallerStub()
+    stub.readProfile.mockResolvedValue({ ...defaultProfile, plugins: [] })
+    const store = makeSettings(env.dshHome)
+    const { manager } = makeManager(env, stub, store)
+
+    const result = await manager.createPack({ name: 'Ghost Skill', packageNames: [], skillNames: ['ghost-skill'] })
+    expect(result.failures).toEqual([{ packageName: 'ghost-skill', reason: '未找到已安装的 Skill 本体' }])
+    expect(stub.installSkillLocal).not.toHaveBeenCalled()
+  })
+})

@@ -120,10 +120,12 @@ plugins:
     expect(() => parsePackManifest('name: 123\ndescription: d\nversion: 1.0.0\nplugins: []')).toThrow('name')
   })
 
-  it('description 非法时抛错', () => {
-    expect(() => parsePackManifest('name: A\nversion: 1.0.0\nplugins: []')).toThrow('description')
-    expect(() => parsePackManifest('name: A\ndescription: ""\nversion: 1.0.0\nplugins: []')).toThrow('description')
-    expect(() => parsePackManifest('name: A\ndescription: "   "\nversion: 1.0.0\nplugins: []')).toThrow('description')
+  it('description 为空时用 name 兜底，超长仍抛错', () => {
+    // 自产的包会因为 Profile 没有描述而写出空 description。导入这边必须能接住，
+    // 否则「导出成功、导入失败」就是死循环；长度上限仍然是硬约束。
+    expect(parsePackManifest('name: A\nversion: 1.0.0\nplugins: []').description).toBe('DSH 整合包：A')
+    expect(parsePackManifest('name: A\ndescription: ""\nversion: 1.0.0\nplugins: []').description).toBe('DSH 整合包：A')
+    expect(parsePackManifest('name: A\ndescription: "   "\nversion: 1.0.0\nplugins: []').description).toBe('DSH 整合包：A')
     expect(() => parsePackManifest(`name: A\ndescription: "${'d'.repeat(501)}"\nversion: 1.0.0\nplugins: []`)).toThrow('description')
   })
 

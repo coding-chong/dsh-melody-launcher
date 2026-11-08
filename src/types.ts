@@ -687,7 +687,7 @@ export interface InstallQueueJobInputs {
   'pack-import': { path: string; items?: string[]; name?: string }
   /** 官方默认整合包：要获取的包版本号。 */
   'official-pack': string
-  'dsh-market': { action: 'install' | 'update'; name: string; profileName?: string; exactVersion?: string }
+  'dsh-market': { action: 'install' | 'update'; name: string; profileName?: string; exactVersion?: string; /** 卡片条目的仓库地址，用于在同名条目之间消歧。 */ url?: string }
   'skill-market-install': { repository: string; target: SkillInstallTarget }
   'skill-market-install-by-name': { sourceRepository: string; skillId: string }
 }
@@ -1101,6 +1101,8 @@ export interface NonstandardPackPluginPreview {
   source: PackComponentSource
   sourceLabel: string
   targetId: string | null
+  /** 市场条目的仓库地址：同名条目只能靠它区分，安装时随请求一起送给主进程。 */
+  marketUrl?: string
   reason?: string
 }
 
@@ -1269,10 +1271,11 @@ export interface LauncherApi {
   analyzeCatalogRepository(fullName: string, defaultBranch: string, repositoryUpdatedAt?: string): Promise<CatalogRepositoryAnalysis>
   importCatalogUrl(url: string): Promise<CatalogImportResult>
   loadDshMarket(force?: boolean): Promise<DshMarketCatalog>
-  installDshMarketPlugin(name: string, profileName?: string, exactVersion?: string): Promise<DshMarketInstalledPlugin[]>
-  updateDshMarketPlugin(name: string, profileName?: string): Promise<DshMarketInstalledPlugin[]>
-  uninstallDshMarketPlugin(name: string, profileName?: string): Promise<DshMarketInstalledPlugin[]>
-  toggleDshMarketPlugin(name: string, enabled: boolean): Promise<DshMarketInstalledPlugin[]>
+  installDshMarketPlugin(name: string, profileName?: string, exactVersion?: string, url?: string): Promise<DshMarketInstalledPlugin[]>
+  /** 同上：用卡片 URL 区分同名条目。 */
+  updateDshMarketPlugin(name: string, profileName?: string, url?: string): Promise<DshMarketInstalledPlugin[]>
+  uninstallDshMarketPlugin(name: string, profileName?: string, url?: string): Promise<DshMarketInstalledPlugin[]>
+  toggleDshMarketPlugin(name: string, enabled: boolean, url?: string): Promise<DshMarketInstalledPlugin[]>
   checkDshMarketUpdates(force?: boolean): Promise<Record<string, DshMarketUpdateStatus>>
   installPlugin(request: string | PluginInstallRequest): Promise<RepositoryInstallResult>
   importStandalonePlugin(): Promise<ProfileState | null>
