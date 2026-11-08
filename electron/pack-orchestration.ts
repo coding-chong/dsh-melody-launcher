@@ -126,7 +126,9 @@ export type GuardPackStartOptions = {
   isRuntimeRunning: () => boolean
   isInstallerBusy: () => boolean
   isPackBusy: () => boolean
-}/**
+}
+
+/**
  * 整合包操作启动前的互斥守卫（纯逻辑，不抛）。按优先级返回首个拒绝原因：
  *   1) DSH 运行时正在运行；
  *   2) 普通安装器忙；

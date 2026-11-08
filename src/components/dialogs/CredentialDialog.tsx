@@ -201,7 +201,7 @@ export function CredentialDialog({
           ) : (
             <div className="custom-api-panel">
               <div className="custom-api-heading">
-                <div><strong>自定义模型服务</strong><span>通过 DSH 内置的 LLM Provider 加载。</span></div>
+                <div><strong>自定义模型服务</strong><span>通过 DSH 内置的 LLM Provider 加载，读取自 Profile「{profileName}」的 cordis.patch.yml（llm-pi-ai 条目）。</span></div>
                 <div className="custom-api-heading-actions">
                   <button type="button" className="secondary-button compact" disabled={busy || loading} onClick={() => void onSyncCustom()}><LoaderCircle size={15} className={busy ? 'spin' : ''} />同步到全局设置</button>
                   <button type="button" className="secondary-button compact" disabled={busy || loading} onClick={() => { setDraft(emptyDraft()); setConfirmingRemove(null) }}><Plus size={15} />新增</button>

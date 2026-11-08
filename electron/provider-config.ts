@@ -257,7 +257,7 @@ export async function updateProviderCatalog(
       name: PI_AI_ENTRY_NAME,
       config: { providers: after },
     }))
-    await writeSource(location.filePath, opened.document.toString({ lineWidth: 0 }), 0o644)
+    await writeSource(location.filePath, opened.document.toString({ lineWidth: 0 }), 0o600)
     return { location, changed: true }
   }
 
@@ -283,7 +283,7 @@ export async function updateProviderCatalog(
     }
   }
 
-  const mode = location.kind === 'legacy-settings' ? 0o600 : 0o644
+  const mode = 0o600
   await writeSource(location.filePath, opened.document.toString({ lineWidth: 0 }), mode)
   return { location, changed: true }
 }
