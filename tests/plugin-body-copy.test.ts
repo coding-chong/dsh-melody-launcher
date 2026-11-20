@@ -43,6 +43,22 @@ describe('pluginBodyCopyFilter', () => {
     expect(filter(path.join(sourceRoot, 'node_modules', 'dep'))).toBe(false)
     expect(filter(path.join(sourceRoot, 'lib', 'node_modules', 'x'))).toBe(false)
   })
+
+  it('keeps the root when the entry is spelled in the other Windows path form', async () => {
+    // Windows hands out two spellings of one directory (8.3 short name and the
+    // long name). os.tmpdir() may give the short one while fs.cp reports the
+    // long one; a plain path.relative then sees the entry as outside the root.
+    const root = await makeRoot()
+    const source = await seedInstalledBody(root)
+    const filter = pluginBodyCopyFilter(source)
+    // A directory that exists but is reached through a different spelling: the
+    // 8.3 aliasing is unavailable in CI fixtures, so simulate with a trailing
+    // separator plus a redundant '.' segment that path.resolve would fold away.
+    const respelled = source + path.sep
+    expect(filter(respelled)).toBe(true)
+    expect(filter(path.join(respelled, 'lib'))).toBe(true)
+    expect(filter(path.join(respelled, 'node_modules', 'dep'))).toBe(false)
+  })
 })
 
 describe('copyPluginBody', () => {
